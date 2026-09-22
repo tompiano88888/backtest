@@ -1,0 +1,9 @@
+.venv/
+.uv-cache/
+__pycache__/
+.pytest_cache/
+*.egg-info/
+data/
+outputs/
+.env
+*.duckdb.wal

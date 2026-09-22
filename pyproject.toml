@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cn-backtest"
+version = "0.1.0"
+description = "Chinese multi-asset historical simulation infrastructure"
+requires-python = ">=3.12"
+dependencies = ["duckdb>=1.1,<2", "pyarrow>=18,<26", "tzdata>=2025.1", "pytz>=2025.1"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10"]
+
+[project.scripts]
+cn-backtest = "backtest.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["backtest*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
