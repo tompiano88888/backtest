@@ -6,4 +6,6 @@ __pycache__/
 data/
 outputs/
 .env
+.env.*
+*.local.json
 *.duckdb.wal

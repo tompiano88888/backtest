@@ -16,6 +16,7 @@ class Snapshot:
     risk_ratio: Decimal | None
     funding_gap: Decimal
     pnl: Decimal
+    dividend_receivable: Decimal = Decimal(0)
 
 
 class Ledger:
@@ -32,6 +33,8 @@ class Ledger:
         self.settled: set[tuple[str, date]] = set()
         self.actions: set[str] = set()
         self.last_equity = self.initial_cash
+        self.receivables: dict[str, dict] = {}
+        self.noncash_entries: list[dict] = []
 
     def quantity(self, instrument, side, group=None):
         return sum(p.quantity for p in self.lots if p.instrument == instrument and p.side == side and (group is None or p.group == group))
@@ -44,6 +47,33 @@ class Ledger:
     def _cash(self, amount, kind, instrument, group, stamp):
         self.cash += amount
         self.entries.append(dict(time=str(stamp), kind=kind, instrument=instrument, group=group, amount=str(amount)))
+
+    def post_cash_event(self, event_id, amount, kind, instrument, group, stamp):
+        """Framework accounting events only; strategies must submit orders instead."""
+        amount = D(amount)
+        if event_id in self.actions:
+            raise ValueError("Duplicate cash event")
+        self._cash(amount, kind, instrument, group, stamp)
+        self.entries[-1]["event_id"] = event_id
+        self.actions.add(event_id)
+
+    def recognize_dividend(self, claim_id, instrument, group, gross, tax, day):
+        key = f"dividend-recognize:{claim_id}"
+        gross, tax = D(gross), D(tax)
+        if key in self.actions or not 0 <= tax <= gross:
+            raise ValueError("Duplicate/invalid dividend receivable")
+        if self.instruments[instrument].asset not in (Asset.EQUITY, Asset.FUND):
+            raise ValueError("Dividend requires equity or fund")
+        self.receivables[claim_id] = dict(instrument=instrument, group=group, amount=gross-tax)
+        self.noncash_entries.append(dict(time=str(day), kind="dividend_receivable", claim_id=claim_id,
+                                        instrument=instrument, group=group, gross=str(gross), tax=str(tax), amount=str(gross-tax)))
+        self.actions.add(key)
+
+    def pay_dividend(self, claim_id, day):
+        claim = self.receivables[claim_id]
+        self.post_cash_event(f"dividend-payment:{claim_id}", claim["amount"], "cash_dividend",
+                             claim["instrument"], claim["group"], day)
+        del self.receivables[claim_id]
 
     def apply(self, fill: Fill):
         order = fill.instruction
@@ -133,6 +163,8 @@ class Ledger:
         result = defaultdict(lambda: D(0))
         for entry in self.entries:
             result[entry["group"]] += D(entry["amount"])
+        for claim in self.receivables.values():
+            result[claim["group"]] += claim["amount"]
         for p in self.lots:
             inst = self.instruments[p.instrument]
             price = self.marks[p.instrument]
@@ -140,7 +172,8 @@ class Ledger:
         return dict(result)
 
     def snapshot(self, rules: dict[str, MarginRule]) -> Snapshot:
-        equity = self.cash
+        receivable = sum((c["amount"] for c in self.receivables.values()), D(0))
+        equity = self.cash + receivable
         future_margin = defaultdict(lambda: {1: D(0), -1: D(0)})
         option_margin = D(0)
         for p in self.lots:
@@ -171,4 +204,4 @@ class Ledger:
                 option_margin += p.quantity * inst.multiplier * per_unit
         margin = option_margin + sum((max(sides.values()) for sides in future_margin.values()), D(0))
         return Snapshot(self.cash, equity, margin, margin / equity if equity > 0 else None,
-                        max(margin - self.cash, D(0)), equity - self.initial_cash)
+                        max(margin - self.cash, D(0)), equity - self.initial_cash, receivable)

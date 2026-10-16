@@ -1,0 +1,155 @@
+{
+  "initial_cash": "10000",
+  "instruments": [
+    {
+      "id": "S",
+      "asset": "fund",
+      "account": "security",
+      "exchange": "TEST",
+      "product": "S",
+      "lot": 100,
+      "sell_delay_days": 1
+    }
+  ],
+  "execution": {
+    "participation": "1"
+  },
+  "accounting": {
+    "dividends": [
+      {
+        "event_id": "S-div-1",
+        "instrument": "S",
+        "record_date": "2026-09-18",
+        "ex_date": "2026-09-21",
+        "payment_date": "2026-09-22",
+        "cash_per_unit": "1",
+        "withholding_rate": ".1"
+      }
+    ],
+    "idle_cash": {
+      "enabled": true,
+      "rates": [
+        {
+          "valid_from": "2026-01-01",
+          "annual_rate": ".015"
+        }
+      ],
+      "base": "cash_less_margin",
+      "reserve": "0",
+      "day_count": 365,
+      "quantum": ".00000001"
+    }
+  },
+  "frames": [
+    {
+      "time": "2026-09-18T15:00:00+08:00",
+      "bars": [
+        {
+          "instrument": "S",
+          "start": "2026-09-18T09:30:00+08:00",
+          "end": "2026-09-18T15:00:00+08:00",
+          "trading_date": "2026-09-18",
+          "open": "10",
+          "close": "10",
+          "high": "10",
+          "low": "9",
+          "volume": 10000
+        }
+      ],
+      "open_instruments": [
+        "S"
+      ],
+      "accounting_day_start": "2026-09-18",
+      "accounting_day_end": "2026-09-18"
+    },
+    {
+      "time": "2026-09-19T15:00:00+08:00",
+      "bars": [],
+      "open_instruments": [],
+      "accounting_day_start": "2026-09-19",
+      "accounting_day_end": "2026-09-19"
+    },
+    {
+      "time": "2026-09-20T15:00:00+08:00",
+      "bars": [],
+      "open_instruments": [],
+      "accounting_day_start": "2026-09-20",
+      "accounting_day_end": "2026-09-20"
+    },
+    {
+      "time": "2026-09-21T15:00:00+08:00",
+      "bars": [
+        {
+          "instrument": "S",
+          "start": "2026-09-21T09:30:00+08:00",
+          "end": "2026-09-21T15:00:00+08:00",
+          "trading_date": "2026-09-21",
+          "open": "9",
+          "close": "9",
+          "high": "10",
+          "low": "9",
+          "volume": 10000
+        }
+      ],
+      "open_instruments": [
+        "S"
+      ],
+      "accounting_day_start": "2026-09-21",
+      "accounting_day_end": "2026-09-21"
+    },
+    {
+      "time": "2026-09-22T15:00:00+08:00",
+      "bars": [
+        {
+          "instrument": "S",
+          "start": "2026-09-22T09:30:00+08:00",
+          "end": "2026-09-22T15:00:00+08:00",
+          "trading_date": "2026-09-22",
+          "open": "9",
+          "close": "9",
+          "high": "10",
+          "low": "9",
+          "volume": 10000
+        }
+      ],
+      "open_instruments": [
+        "S"
+      ],
+      "accounting_day_start": "2026-09-22",
+      "accounting_day_end": "2026-09-22"
+    }
+  ],
+  "instructions": [
+    {
+      "at": "2026-09-18T09:00:00+08:00",
+      "legs": [
+        {
+          "instrument": "S",
+          "side": 1,
+          "quantity": 100,
+          "group": "a"
+        }
+      ]
+    },
+    {
+      "at": "2026-09-21T09:00:00+08:00",
+      "legs": [
+        {
+          "instrument": "S",
+          "side": 1,
+          "quantity": 100,
+          "effect": "close",
+          "group": "a"
+        },
+        {
+          "instrument": "S",
+          "side": 1,
+          "quantity": 100,
+          "group": "b"
+        }
+      ]
+    }
+  ],
+  "data_version": "synthetic-account-events-v1",
+  "description": "SYNTHETIC: prices, dates and 10% withholding are test inputs, not historical or statutory rates"
+}

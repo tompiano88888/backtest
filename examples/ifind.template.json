@@ -1,21 +1,21 @@
 {
   "request": {
     "frequency": "1m",
-    "codes": "REPLACE_WITH_AUTHORIZED_VENDOR_CODE",
-    "indicators": "REPLACE_WITH_SUPERCOMMAND_GENERATED_INDICATORS",
-    "parameters": "REPLACE_WITH_VERIFIED_PARAMETERS",
-    "start": "REPLACE_WITH_START_TIME",
-    "end": "REPLACE_WITH_END_TIME"
+    "codes": "300033.SZ",
+    "indicators": "open,high,low,close,volume,amount",
+    "parameters": "Interval:1,CPS:no,Fill:Original",
+    "start": "2026-09-21 09:31:00",
+    "end": "2026-09-21 09:35:00"
   },
-  "column_mapping": {
-    "instrument": "NORMALIZED_INSTRUMENT_COLUMN",
-    "start": "AWARE_BAR_START_COLUMN",
-    "end": "AWARE_BAR_END_COLUMN",
-    "trading_date": "CALENDAR_DERIVED_TRADING_DATE_COLUMN",
-    "open": "VERIFIED_OPEN_COLUMN",
-    "high": "VERIFIED_HIGH_COLUMN",
-    "low": "VERIFIED_LOW_COLUMN",
-    "close": "VERIFIED_CLOSE_COLUMN",
-    "volume": "NORMALIZED_VOLUME_COLUMN"
+  "batch_size": 20,
+  "chunk_days": 5,
+  "retries": 3,
+  "calendar_file": "ifind.sessions.example.jsonl",
+  "normalization": {
+    "timestamp_at": "end",
+    "instruments": {
+      "300033.SZ": {"id": "300033.SZ", "asset": "equity", "volume_multiplier": "1", "turnover_multiplier": "1"}
+    },
+    "columns": {"open": "open", "high": "high", "low": "low", "close": "close", "volume": "volume", "turnover": "amount"}
   }
 }

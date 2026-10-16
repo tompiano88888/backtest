@@ -1,4 +1,10 @@
-# 第一批接口
+# 框架接口
+
+行情 `Bar` 可保留 `settlement_price`（当日结算价）和 `previous_settlement_price`（供应商前结算价），均使用 Decimal。前结算价不从相邻记录推算，也不替代当日结算基准；旧 Parquet 缺此前结算字段时读取为 None。
+
+股指期货全历史日期型落地使用 `backtest.ifind_futures_daily.publish_daily/publish_cache`，版本保存在独立 DuckDB 表 futures_daily_snapshots。它不属于 Store.bars 的带时间戳清单，历史时段 Provider 尚未装配；读取步骤见 [股指期货日线](INDEX_FUTURES.md)。
+
+合约资料使用 `backtest.ifind_contracts.publish_contracts/contract_from_snapshot`，版本表为 futures_contract_snapshots，固定关联的日线版本和 metadata revisions。资料有效时间按生命周期，可知时间按实际下载时刻；历史公告和时段未验证时不回填 known_at。详见 [股指期货元数据](INDEX_FUTURES_METADATA.md)。
 
 ## 回调与显式交易
 
@@ -31,10 +37,19 @@ engine.step(frame, on_bar=on_bar)
 `open_instruments` 来自交易日历，不得根据 bars 的键猜测。某腿在交易时段内缺行情仍应出现在 open_instruments，这会消耗一次组合尝试；休市腿不应出现。
 `settle_instruments` 列出该时点结束交易日的标的（证券也可以列入，用于普通订单到期）。
 `settlements` 为 `(instrument_id, trading_date, Decimal_price)` 元组，来自最终日线结算记录。
+可选`valuation_marks`是没有可撮合Bar时的显式原始参考估值，不产生任何成交。
 必须为待结算的衍生品持仓提供结算价，否则运行失败。
 日终回调是 `engine.step(frame, on_day_end=...)`；其中新指令不会在刚结束的 Bar 成交。
+启用accounting时仅在`accounting_day_end`全账户屏障调用；未启用时保持旧结算Frame回调行为。
 
 ## 账本
+
+统一分红和闲置收益配置见[账户事件](ACCOUNT_EVENTS.md)。`engine_from_config`读取可选
+`accounting`；`Frame.accounting_day_start/end`显式提供连续自然日及全市场日终屏障。
+`CashDividend`支持股票与基金；`AccountingEvents`调度登记、除息应收及派息。
+`IdleCashIncome`按历史配置日利率对正闲置现金记账，默认不启用。
+`DividendTaxPolicy`和`AccountEventHandler`是后续股票公司行为的框架扩展接口。
+新增`Snapshot.dividend_receivable`，已计入权益与组PnL；应收不作现金或计息本金。
 
 `Ledger.apply(Fill)`：由撮合引擎调用，写现金和持仓；不能用它绕过引擎执行研究指令。
 `Ledger.settle(id, trading_date, price)`：重复结算报错；交割日自动现金结清。期权价是期权单位价值。
@@ -64,6 +79,9 @@ with Store("data") as store:
 
 ## iFinD 配置
 
-`request` 原样传入 SDK 的 codes、indicators、parameters、start、end；frequency 选择 THS_HQ（日线）或 THS_HF（分钟）。
-`column_mapping` 是标准字段 → 供应商响应列名。输出时间必须带时区，交易日须已按日历标准化。实际 SDK 返回结构与字段必须用有权限的样本核验。
+`request` 指定 SDK 函数与参数；frequency 选择 THS_HQ（日线）或 THS_HF（分钟），另支持 THS_BD、THS_DS、THS_DP 和 THS_DateQuery。IFinDSource 是上下文管理器，管理登录／登出并解析官方 JSON 响应。
+CLI update 改用 `normalization`（代码、列、单位和分钟时间戳边界）及 `calendar_file`（带时区实际交易时段）生成标准 Bar，旧 column_mapping 任务需迁移。
+新增 ifind-check、ifind-query 和 update --validate-only；实际 SDK 返回字段和权限须通过小样本核验。配置、命令、错误行为及兼容性见 [iFinD 指南](IFIND.md)。
 接口参考：https://quantapi.51ifind.com/gwstatic/static/ds_web/quantapi-web/help-center/manual.html
+
+ETF 分红元数据：`backtest.ifind_etf_dividends.read_events(store, version, code, as_of=None)` 返回固定快照的 Decimal 每份现金及独立事件日期。as_of 为策略 PIT 过滤；未传用于事后账务资料。详见 [ETF 分红](ETF_DIVIDENDS.md)。

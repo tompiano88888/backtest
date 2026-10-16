@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from dataclasses import replace
 
 import pytest
 
@@ -52,3 +53,12 @@ def test_failed_fetch_does_not_advance_dataset(tmp_path):
             update(s, fail, lambda x: x, "1m", sleep=lambda _: None)
         assert s.latest() == version
         assert s.db.execute("SELECT status FROM update_runs").fetchone()[0] == "failed"
+
+
+def test_previous_settlement_survives_storage_without_replacing_daily_settlement(tmp_path):
+    original = replace(bar(), settlement_price=D("101.20"), previous_settlement_price=D("98.60"))
+    with Store(tmp_path) as store:
+        version = store.publish([original], "test", frequency="1d")
+        loaded = store.bars(version, ["F"], T, T + timedelta(days=1), frequency="1d")
+        assert loaded == [original]
+        assert loaded[0].settlement_price - loaded[0].previous_settlement_price == D("2.60")

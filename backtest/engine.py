@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Callable
 from types import MappingProxyType
@@ -32,6 +32,11 @@ class Frame:
     settle_instruments: frozenset[str] = frozenset()
     # (instrument, trading_date, settlement_price) from final daily records
     settlements: tuple = ()
+    # Explicit whole-account calendar clock; separate from market settlement clocks.
+    accounting_day_start: date | None = None
+    accounting_day_end: date | None = None
+    # Explicit raw valuation references when no tradeable bar exists (e.g. ex-date suspension).
+    valuation_marks: dict | None = None
 
 
 @dataclass
@@ -69,7 +74,7 @@ class StrategyContext:
 
 
 class Engine:
-    def __init__(self, ledger: Ledger, margin_rules: dict[str, MarginRule], config=None, execution_by_instrument=None):
+    def __init__(self, ledger: Ledger, margin_rules: dict[str, MarginRule], config=None, execution_by_instrument=None, accounting_events=None):
         self.ledger = ledger
         self.margin_rules = margin_rules
         self.config = config or ExecutionConfig()
@@ -81,6 +86,11 @@ class Engine:
         self._counter = 0
         self.targets: dict[tuple, int] = {}
         self.groups: dict[str, dict] = {}
+        self.accounting_events = accounting_events
+        if accounting_events:
+            for event in accounting_events.dividends:
+                if ledger.instruments[event.instrument].asset not in (Asset.EQUITY, Asset.FUND):
+                    raise ValueError("Dividend requires equity or fund")
 
     def submit(self, legs: list[Instruction], at: datetime, combination=False, mode=None):
         if not legs or at.tzinfo is None or (self.now and at < self.now):
@@ -184,6 +194,26 @@ class Engine:
             raise ValueError("Frames must be aware and strictly ordered")
         if any(b.end != frame.time or key != b.instrument for key, b in frame.bars.items()):
             raise ValueError("Bars must share the frame end")
+        references = {i: D(p) for i, p in (frame.valuation_marks or {}).items()}
+        if not references.keys() <= self.ledger.instruments.keys():
+            raise ValueError("Unknown valuation reference instrument")
+        if any(p < 0 for i, p in references.items() if self.ledger.instruments[i].asset in (Asset.EQUITY, Asset.FUND)):
+            raise ValueError("Negative security valuation reference")
+        if not self.accounting_events and (frame.accounting_day_start or frame.accounting_day_end):
+            raise ValueError("Accounting clock requires AccountingEvents configuration")
+        if self.accounting_events:
+            if frame.accounting_day_start:
+                ex_holdings = {p.instrument for p in self.ledger.lots
+                               if any(c["event"].instrument == p.instrument and c["event"].ex_date == frame.accounting_day_start
+                                      for c in self.accounting_events.claims)}
+                if not ex_holdings <= frame.bars.keys() | references.keys():
+                    raise ValueError(f"Missing ex-date raw valuation: {sorted(ex_holdings - frame.bars.keys() - references.keys())}")
+                self.accounting_events.begin(frame.accounting_day_start, self.ledger)
+            day = self.accounting_events.current_day
+            if day is None:
+                raise ValueError("Frames require an open accounting day")
+            if frame.accounting_day_end is not None and frame.accounting_day_end != day:
+                raise ValueError("Accounting end date mismatch")
         self.now = frame.time
         budgets = {i: int(b.volume * self.execution_by_instrument.get(i, self.config).participation) for i, b in frame.bars.items()}
         # Eligibility is decided before any fill; all closing legs precede all opening legs.
@@ -241,6 +271,7 @@ class Engine:
                     self._warn(op, "COMBINATION_TIMEOUT")
             elif op.state == "unwinding":
                 self._warn(op, "EXIT_PENDING")
+        self.ledger.marks.update(references)
         for i, b in frame.bars.items():
             self.ledger.marks[i] = b.close
         if on_bar:
@@ -267,6 +298,8 @@ class Engine:
                 del self.targets[key]
             elif key[0] in frame.settle_instruments:
                 self._reconcile_target(*key, frame.time)
+        if frame.accounting_day_end:
+            self.accounting_events.end(frame.accounting_day_end, self.ledger, self.margin_rules)
         snapshot = self.ledger.snapshot(self.margin_rules)
         for group, state in self.groups.items():
             held = {(p.instrument, p.side) for p in self.ledger.lots if p.group == group}
@@ -281,11 +314,11 @@ class Engine:
             elif state["status"] != "incomplete":
                 state["status"] = "holding"
         self.snapshots.append(dict(time=str(frame.time), **snapshot.__dict__))
-        if frame.settle_instruments:
+        if frame.accounting_day_end or frame.settle_instruments and not self.accounting_events:
             self.ledger.last_equity = snapshot.equity
         if snapshot.equity <= 0 or snapshot.risk_ratio is not None and snapshot.risk_ratio > 1:
             self.warnings.append(dict(time=str(frame.time), code="FUNDING_RISK", equity=str(snapshot.equity), margin=str(snapshot.margin)))
-        if frame.settle_instruments and on_day_end:
+        if (frame.accounting_day_end or frame.settle_instruments and not self.accounting_events) and on_day_end:
             on_day_end(StrategyContext(self, frame))
         return snapshot
 

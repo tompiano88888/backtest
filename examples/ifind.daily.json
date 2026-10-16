@@ -1,0 +1,17 @@
+{
+  "request": {
+    "frequency": "1d",
+    "codes": "300033.SZ",
+    "indicators": "open,high,low,close,volume,amount",
+    "parameters": "Interval:D,CPS:1,Fill:Omit",
+    "start": "2026-09-21",
+    "end": "2026-09-21"
+  },
+  "calendar_file": "ifind.sessions.example.jsonl",
+  "normalization": {
+    "instruments": {
+      "300033.SZ": {"id": "300033.SZ", "asset": "equity", "volume_multiplier": "1", "turnover_multiplier": "1"}
+    },
+    "columns": {"open": "open", "high": "high", "low": "low", "close": "close", "volume": "volume", "turnover": "amount"}
+  }
+}

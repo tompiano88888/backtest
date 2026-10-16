@@ -137,7 +137,7 @@ class Store:
         return sorted(result, key=lambda b: (b.end, b.instrument))
 
 
-PRICE_FIELDS = {"open", "high", "low", "close", "settlement_price", "upper_limit", "lower_limit", "turnover", "open_interest"}
+PRICE_FIELDS = {"open", "high", "low", "close", "settlement_price", "previous_settlement_price", "upper_limit", "lower_limit", "turnover", "open_interest"}
 
 
 def bar_from_record(record):

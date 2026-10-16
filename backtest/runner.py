@@ -9,6 +9,7 @@ from pathlib import Path
 import platform
 
 from .accounting import Ledger
+from .account_events import from_config as accounting_from_config
 from .engine import Engine, ExecutionConfig, Frame
 from .models import Account, Asset, D, Instrument, Instruction, MarginRule
 from .storage import bar_from_record, json_default
@@ -41,10 +42,11 @@ def engine_from_config(config):
         raise ValueError("Duplicate instruments")
     rules = {key: MarginRule(**{k: (v if k == "model" else D(v)) for k, v in row.items()}) for key, row in config.get("margin_rules", {}).items()}
     return Engine(Ledger(instruments, config["initial_cash"]), rules, execution_from_record(config.get("execution", {})),
-                  {i: execution_from_record(row) for i, row in config.get("execution_by_instrument", {}).items()})
+                  {i: execution_from_record(row) for i, row in config.get("execution_by_instrument", {}).items()},
+                  accounting_from_config(config["accounting"]) if "accounting" in config else None)
 
 
-def run_scenario(config):
+def run_scenario(config, on_bar=None):
     """Explicit frame replay for reproducible tests and normalized research inputs."""
     engine = engine_from_config(config)
     inputs = sorted(config.get("instructions", []), key=lambda x: datetime.fromisoformat(x["at"]))
@@ -64,7 +66,12 @@ def run_scenario(config):
             index += 1
         bars = {r["instrument"]: bar_from_record(r) for r in row.get("bars", [])}
         settlements = tuple((s["instrument"], date.fromisoformat(s["trading_date"]), D(s["settlement_price"])) for s in row.get("settlements", []))
-        engine.step(Frame(stamp, bars, frozenset(row["open_instruments"]), frozenset(row.get("settle_instruments", [])), settlements))
+        start_day = date.fromisoformat(row["accounting_day_start"]) if row.get("accounting_day_start") else None
+        end_day = date.fromisoformat(row["accounting_day_end"]) if row.get("accounting_day_end") else None
+        engine.step(Frame(stamp, bars, frozenset(row["open_instruments"]), frozenset(row.get("settle_instruments", [])), settlements,
+                          start_day, end_day, row.get("valuation_marks")), on_bar=on_bar)
+    if engine.accounting_events and engine.accounting_events.current_day is not None:
+        engine.warnings.append(dict(code="ACCOUNTING_DAY_NOT_CLOSED", day=str(engine.accounting_events.current_day)))
     if index < len(inputs):
         engine.warnings.append(dict(code="INPUT_AFTER_BACKTEST_END", count=len(inputs) - index))
     return engine
@@ -88,9 +95,19 @@ def result(engine, config):
                         code_sha256=code.hexdigest(), python=platform.python_version(),
                         dependencies={name: importlib.metadata.version(name) for name in ("duckdb", "pyarrow", "tzdata", "pytz")},
                         data_version=config.get("data_version", "inline-scenario")),
-        assumptions=["unified_cash_pool", "no_funding_admission_gate", "cash_delivery", "no_forced_liquidation", "bar_liquidity_approximation"],
+        assumptions=["unified_cash_pool", "no_funding_admission_gate", "cash_delivery", "no_forced_liquidation", "bar_liquidity_approximation"] +
+                    (["explicit_calendar_accounting_clock", "dividend_net_receivable_on_ex_date_cash_on_payment_day_start",
+                      "configured_dividend_tax_assumption_not_automatic_stock_tax_law",
+                      "idle_cash_estimated_daily_income_not_repo_order_simulation"] if engine.accounting_events else []),
         final=asdict(final), max_drawdown=drawdown, group_pnl=engine.ledger.group_pnl(),
         snapshots=engine.snapshots, positions=[asdict(p) for p in engine.ledger.lots],
         fills=[asdict(f) for f in engine.ledger.fills], cash_entries=engine.ledger.entries,
+        noncash_entries=engine.ledger.noncash_entries,
+        receivables=engine.ledger.receivables,
+        accounting=engine.accounting_events.report() if engine.accounting_events else None,
+        income=dict(dividend_gross=sum((D(r["gross"]) for r in engine.ledger.noncash_entries if r["kind"] == "dividend_receivable"), D(0)),
+                    dividend_tax=sum((D(r["tax"]) for r in engine.ledger.noncash_entries if r["kind"] == "dividend_receivable"), D(0)),
+                    dividend_cash_paid=sum((D(r["amount"]) for r in engine.ledger.entries if r["kind"] == "cash_dividend"), D(0)),
+                    idle_cash_income=sum((D(r["amount"]) for r in engine.ledger.entries if r["kind"] == "idle_cash_income"), D(0))),
         operations=[asdict(o) for o in engine.operations], groups=engine.groups, warnings=engine.warnings,
     )

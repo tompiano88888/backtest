@@ -1,0 +1,9 @@
+{
+  "request": {
+    "function": "THS_DateQuery",
+    "exchange": "SSE",
+    "parameters": "dateType:0,period:D,dateFormat:0",
+    "start": "2026-09-01",
+    "end": "2026-09-30"
+  }
+}

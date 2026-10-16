@@ -72,6 +72,7 @@ class Bar:
     suspended: bool = False
     turnover: Decimal | None = None
     open_interest: Decimal | None = None
+    previous_settlement_price: Decimal | None = None
 
     def __post_init__(self):
         if self.start.tzinfo is None or self.end.tzinfo is None or self.start >= self.end:
@@ -80,7 +81,7 @@ class Bar:
             raise ValueError("Invalid OHLCV")
         if any(not p.is_finite() for p in (self.open, self.high, self.low, self.close)):
             raise ValueError("Invalid price")
-        for value in (self.settlement_price, self.upper_limit, self.lower_limit, self.turnover, self.open_interest):
+        for value in (self.settlement_price, self.previous_settlement_price, self.upper_limit, self.lower_limit, self.turnover, self.open_interest):
             if value is not None and not value.is_finite():
                 raise ValueError("Non-finite optional field")
 
@@ -115,7 +116,7 @@ class Lot:
 
 @dataclass(frozen=True)
 class Fill:
-    time: datetime
+    time: datetime | date
     trading_date: date
     instruction: Instruction
     price: Decimal

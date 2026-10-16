@@ -1,0 +1,8 @@
+{
+  "request": {
+    "function": "THS_BD",
+    "codes": "300033.SZ",
+    "indicators": "ths_stock_short_name_stock",
+    "parameters": ""
+  }
+}

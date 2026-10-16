@@ -7,7 +7,8 @@ import json
 from pathlib import Path
 
 from .models import Bar, D
-from .pipeline import IFinDSource, configured_normalizer, update
+from .pipeline import IFinDSource, prepare_ifind_update, update_ifind
+from .ifind import IFinDError, credentials_present, load_sdk, request_function
 from .runner import result, run_scenario
 from .storage import Store, bar_from_record, json_default
 
@@ -46,6 +47,12 @@ def main():
     pull = commands.add_parser("update", help="Run configured iFinD SDK request and column normalization")
     pull.add_argument("config")
     pull.add_argument("--root", default="data")
+    pull.add_argument("--validate-only", action="store_true", help="Validate request and calendar locally; no login/download")
+    check = commands.add_parser("ifind-check", help="Check official SDK and credential presence without exposing secrets")
+    check.add_argument("--login", action="store_true", help="Also perform a real login/logout")
+    query = commands.add_parser("ifind-query", help="Query verified SDK functions into a local raw JSON file")
+    query.add_argument("config", help="JSON containing a request object")
+    query.add_argument("--output", default="outputs/ifind-query.json")
     args = parser.parse_args()
     if args.command in ("demo", "run"):
         cfg = demo_config() if args.command == "demo" else json.loads(Path(args.config).read_text(encoding="utf-8"))
@@ -69,11 +76,38 @@ def main():
                 store.put_metadata(**row)
         print(f"Imported {len(records)} metadata records")
     else:
-        config = json.loads(Path(args.config).read_text(encoding="utf-8"))
-        source = IFinDSource()
-        source.login()
-        with Store(args.root) as store:
-            print(update(store, lambda: source.fetch(config["request"]), configured_normalizer(config["column_mapping"]), config["request"]["frequency"]))
+        try:
+            if args.command == "ifind-check":
+                sdk = load_sdk()
+                info = {"sdk_available": True, "credentials_present": credentials_present(),
+                        "functions": [name for name in ("THS_HQ", "THS_HF", "THS_BD", "THS_DS", "THS_DP", "THS_DateQuery") if hasattr(sdk, name)]}
+                if args.login:
+                    with IFinDSource(sdk) as source:
+                        info["login"] = "success"
+                print(json.dumps(info, ensure_ascii=False))
+                return
+            config_path = Path(args.config)
+            config = json.loads(config_path.read_text(encoding="utf-8-sig"))
+            if args.command == "update":
+                requests, normalize = prepare_ifind_update(config, config_path.parent)
+                if args.validate_only:
+                    print(json.dumps({"valid": True, "batches": len(requests), "frequency": normalize.frequency}))
+                    return
+                with IFinDSource(retries=config.get("retries", 3), retry_codes=config.get("retry_codes", [])) as source:
+                    with Store(args.root) as store:
+                        print(update_ifind(store, source, requests, normalize))
+            else:
+                request_function(config["request"])
+                with IFinDSource(retries=config.get("retries", 3), retry_codes=config.get("retry_codes", [])) as source:
+                    records = source.query(config["request"])
+                output = Path(args.output)
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_text(json.dumps({"records": records}, default=json_default, ensure_ascii=False, indent=2), encoding="utf-8")
+                print(f"Saved {len(records)} records to {output.resolve()}")
+        except IFinDError as error:
+            parser.exit(2, f"{error}\n")
+        except (KeyError, ValueError, TypeError, OSError):
+            parser.exit(2, "Invalid/unreadable iFinD task configuration; see docs/IFIND.md\n")
 
 
 if __name__ == "__main__":
