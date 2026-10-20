@@ -1,0 +1,13 @@
+{
+  "execution": {
+    "fee_mode": "historical",
+    "slippage_ticks": 1,
+    "commission_rate": "0",
+    "commission_per_unit": "0"
+  },
+  "historical_fees": {
+    "root": "data/execution_fees",
+    "version": "bf211dd35fc143b6a7d62bf4a483aa98",
+    "as_of": "2026-10-20T06:55:57.828971+00:00"
+  }
+}

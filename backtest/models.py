@@ -56,6 +56,27 @@ class Instrument:
 
 
 @dataclass(frozen=True)
+class Auction:
+    """A discrete auction result, not a synthetic one-minute interval."""
+    instrument: str
+    time: datetime
+    trading_date: date
+    price: Decimal
+    volume: int
+    upper_limit: Decimal | None = None
+    lower_limit: Decimal | None = None
+    suspended: bool = False
+
+    def __post_init__(self):
+        if self.time.tzinfo is None or not self.price.is_finite() or self.price <= 0:
+            raise ValueError("Auction requires aware time and positive finite price")
+        if type(self.volume) is not int or self.volume < 0:
+            raise ValueError("Invalid auction volume")
+        if any(v is not None and not v.is_finite() for v in (self.upper_limit,self.lower_limit)):
+            raise ValueError("Non-finite auction limit")
+
+
+@dataclass(frozen=True)
 class Bar:
     instrument: str
     start: datetime

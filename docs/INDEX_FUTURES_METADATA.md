@@ -1,5 +1,7 @@
 # 股指期货合约元数据
 
+2026-10-20另行导入固定范围537个合约的历史手续费日期序列到独立费用库，见[历史手续费](INDEX_FUTURES_FEES.md)。下文2026-10-09合约观察仍为当次基础资料，不自动变成历史费用。
+
 2026-10-09 根据用户提供的 SuperCommand 命令，以 THS_BD 下载固定日线版本中的 537 个 IF、IC、IM、IH 实际合约资料，写入 `data/index_futures/metadata.duckdb`。查询模板为 `examples/ifind.futures-contracts.json`，71 个指标与 71 项参数逐项对应；账号不进入模板或缓存。
 
 ## 结构与时间语义

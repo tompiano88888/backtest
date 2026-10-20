@@ -11,7 +11,7 @@ import platform
 from .accounting import Ledger
 from .account_events import from_config as accounting_from_config
 from .engine import Engine, ExecutionConfig, Frame
-from .models import Account, Asset, D, Instrument, Instruction, MarginRule
+from .models import Account, Asset, Auction, D, Instrument, Instruction, MarginRule
 from .storage import bar_from_record, json_default
 
 
@@ -30,10 +30,20 @@ def instrument_from_record(record):
 
 def execution_from_record(record):
     row = dict(record)
-    for key in ("participation", "fee_per_unit", "fee_rate", "close_today_fee_per_unit"):
+    for key in ("participation", "fee_per_unit", "fee_rate", "close_today_fee_per_unit", "close_today_fee_rate", "commission_rate", "commission_per_unit"):
         if row.get(key) is not None:
             row[key] = D(row[key])
     return ExecutionConfig(**row)
+
+
+def auction_from_record(record):
+    row = dict(record)
+    row['time'] = datetime.fromisoformat(row['time'])
+    row['trading_date'] = date.fromisoformat(row['trading_date'])
+    for key in ('price','upper_limit','lower_limit'):
+        if row.get(key) is not None:
+            row[key] = D(row[key])
+    return Auction(**row)
 
 
 def engine_from_config(config):
@@ -41,9 +51,14 @@ def engine_from_config(config):
     if len(instruments) != len(config["instruments"]):
         raise ValueError("Duplicate instruments")
     rules = {key: MarginRule(**{k: (v if k == "model" else D(v)) for k, v in row.items()}) for key, row in config.get("margin_rules", {}).items()}
+    fee_provider = None
+    if 'historical_fees' in config:
+        from .fees import HistoricalFees
+        fee_provider = HistoricalFees(**config['historical_fees'])
     return Engine(Ledger(instruments, config["initial_cash"]), rules, execution_from_record(config.get("execution", {})),
                   {i: execution_from_record(row) for i, row in config.get("execution_by_instrument", {}).items()},
-                  accounting_from_config(config["accounting"]) if "accounting" in config else None)
+                  accounting_from_config(config["accounting"]) if "accounting" in config else None,
+                  fee_provider=fee_provider)
 
 
 def run_scenario(config, on_bar=None):
@@ -65,11 +80,14 @@ def run_scenario(config, on_bar=None):
                 engine.target(event["instrument"], event["quantity"], at)
             index += 1
         bars = {r["instrument"]: bar_from_record(r) for r in row.get("bars", [])}
+        auctions = {r['instrument']:auction_from_record(r) for r in row.get('auctions',[])}
+        if len(auctions) != len(row.get('auctions',[])):
+            raise ValueError('Duplicate auction instrument')
         settlements = tuple((s["instrument"], date.fromisoformat(s["trading_date"]), D(s["settlement_price"])) for s in row.get("settlements", []))
         start_day = date.fromisoformat(row["accounting_day_start"]) if row.get("accounting_day_start") else None
         end_day = date.fromisoformat(row["accounting_day_end"]) if row.get("accounting_day_end") else None
         engine.step(Frame(stamp, bars, frozenset(row["open_instruments"]), frozenset(row.get("settle_instruments", [])), settlements,
-                          start_day, end_day, row.get("valuation_marks")), on_bar=on_bar)
+                          start_day, end_day, row.get("valuation_marks"), auctions), on_bar=on_bar)
     if engine.accounting_events and engine.accounting_events.current_day is not None:
         engine.warnings.append(dict(code="ACCOUNTING_DAY_NOT_CLOSED", day=str(engine.accounting_events.current_day)))
     if index < len(inputs):
@@ -102,6 +120,9 @@ def result(engine, config):
         final=asdict(final), max_drawdown=drawdown, group_pnl=engine.ledger.group_pnl(),
         snapshots=engine.snapshots, positions=[asdict(p) for p in engine.ledger.lots],
         fills=[asdict(f) for f in engine.ledger.fills], cash_entries=engine.ledger.entries,
+        fee_details=engine.fees.details,
+        fee_provenance=(dict(version=engine.fees.provider.version, as_of=engine.fees.provider.as_of)
+                        if engine.fees.provider is not None else None),
         noncash_entries=engine.ledger.noncash_entries,
         receivables=engine.ledger.receivables,
         accounting=engine.accounting_events.report() if engine.accounting_events else None,

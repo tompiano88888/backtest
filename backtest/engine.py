@@ -5,9 +5,11 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Callable
 from types import MappingProxyType
+from copy import copy
 
+from .fees import FeeService
 from .accounting import Ledger
-from .models import Asset, Bar, D, Fill, Instruction, MarginRule
+from .models import Asset, Auction, Bar, D, Fill, Instruction, MarginRule
 
 
 @dataclass(frozen=True)
@@ -17,10 +19,43 @@ class ExecutionConfig:
     fee_per_unit: Decimal = Decimal(0)
     fee_rate: Decimal = Decimal(0)
     close_today_fee_per_unit: Decimal | None = None
+    close_today_fee_rate: Decimal | None = None
+
+    commission_rate: Decimal = Decimal(0)
+    commission_per_unit: Decimal = Decimal(0)
+    fee_matching: str = 'fifo'
+    fee_mode: str = 'fixed'
 
     def __post_init__(self):
-        if not 0 < self.participation <= 1 or min(self.slippage_ticks, self.fee_per_unit, self.fee_rate) < 0:
-            raise ValueError("Invalid execution settings")
+        for name in ('participation', 'fee_per_unit', 'fee_rate', 'close_today_fee_per_unit',
+                     'close_today_fee_rate', 'commission_rate', 'commission_per_unit'):
+            value = getattr(self, name)
+            if value is not None:
+                value = D(value)
+                if value < 0:
+                    raise ValueError('Invalid execution fee/participation')
+                object.__setattr__(self, name, value)
+        if not 0 < self.participation <= 1 or type(self.slippage_ticks) is not int or self.slippage_ticks < 0:
+            raise ValueError('Invalid execution settings')
+        if self.fee_matching not in ('fifo', 'today_first') or self.fee_mode not in ('fixed', 'historical'):
+            raise ValueError('Invalid fee mode/matching')
+
+
+@dataclass(frozen=True)
+class ExecutionContext:
+    """Execution-time observations only: never a completed Bar or settlement input."""
+    time: object
+    trading_date: object
+    phase: str
+    marks: object
+    positions: tuple
+    account: object
+    _quantity_quote: object = field(default=None,repr=False)
+
+    def fill_for_quantity(self, quantity):
+        if self._quantity_quote is None:
+            raise ValueError('No candidate fill')
+        return self._quantity_quote(quantity)
 
 
 @dataclass(frozen=True)
@@ -37,6 +72,8 @@ class Frame:
     accounting_day_end: date | None = None
     # Explicit raw valuation references when no tradeable bar exists (e.g. ex-date suspension).
     valuation_marks: dict | None = None
+    # Discrete auction results at frame.time; only earlier instructions may fill.
+    auctions: dict[str, Auction] = field(default_factory=dict)
 
 
 @dataclass
@@ -59,6 +96,7 @@ class StrategyContext:
         self.__engine = engine
         self.time = frame.time
         self.bars = MappingProxyType(dict(frame.bars))
+        self.auctions = MappingProxyType(dict(frame.auctions))
         self.marks = MappingProxyType(dict(engine.ledger.marks))
         self.account = engine.ledger.snapshot(engine.margin_rules)
         self.positions = tuple(MappingProxyType(dict(p.__dict__)) for p in engine.ledger.lots)
@@ -69,12 +107,23 @@ class StrategyContext:
     def target(self, instrument, quantity):
         return self.__engine.target(instrument, quantity, self.time)
 
+    def target_group(self, instrument, quantity, group):
+        return self.__engine.target_group(instrument, quantity, self.time, group)
+
     def target_weight(self, instrument, weight):
         return self.__engine.target_weight(instrument, weight, self.time)
 
+    def fills_since(self, index=0):
+        """Immutable executed fills for strategy lifecycle tracking, not order state."""
+        if type(index) is not int or not 0 <= index <= len(self.__engine.ledger.fills):
+            raise ValueError("Invalid fill cursor")
+        return tuple(self.__engine.ledger.fills[index:])
+
 
 class Engine:
-    def __init__(self, ledger: Ledger, margin_rules: dict[str, MarginRule], config=None, execution_by_instrument=None, accounting_events=None):
+    def __init__(self, ledger: Ledger, margin_rules: dict[str, MarginRule], config=None, execution_by_instrument=None, accounting_events=None,
+                 execution_guard=None, execution_observer=None, fee_provider=None):
+        self.fees = FeeService(fee_provider)
         self.ledger = ledger
         self.margin_rules = margin_rules
         self.config = config or ExecutionConfig()
@@ -87,6 +136,8 @@ class Engine:
         self.targets: dict[tuple, int] = {}
         self.groups: dict[str, dict] = {}
         self.accounting_events = accounting_events
+        self.execution_guard = execution_guard
+        self.execution_observer = execution_observer
         if accounting_events:
             for event in accounting_events.dividends:
                 if ledger.instruments[event.instrument].asset not in (Asset.EQUITY, Asset.FUND):
@@ -135,6 +186,19 @@ class Engine:
         quantity = int(D(weight) * self.ledger.last_equity / nominal / inst.lot) * inst.lot
         self.target(instrument, quantity, at)
 
+    def target_group(self, instrument, quantity: int, at: datetime, group: str):
+        """Persistent target for one independent single-instrument batch."""
+        if not group or group == 'standalone' or group in self.groups:
+            raise ValueError('Independent group required; combinations use explicit legs')
+        if any(p.group == group and p.instrument != instrument for p in self.ledger.lots):
+            raise ValueError('Independent target group must contain one instrument')
+        if any(g == group and i != instrument for i,g in self.targets):
+            raise ValueError('Independent target group already belongs to another instrument')
+        if type(quantity) is not int:
+            raise ValueError('Target quantity must be integer')
+        self.targets[instrument,group] = quantity
+        self._reconcile_target(instrument,group,at)
+
     def _reconcile_target(self, instrument, group, at):
         for op in self.operations:
             if not op.combination and op.state == "pending" and any(l.instrument == instrument and l.group == group for l in op.legs):
@@ -150,17 +214,21 @@ class Engine:
                 legs.append(Instruction(instrument, side, wanted - held, "open", group))
         if legs:
             self.submit(legs, at)
+        elif target == 0 and group != 'standalone':
+            self.targets.pop((instrument,group),None)
 
     def _warn(self, op, code, **extra):
         self.warnings.append(dict(time=str(self.now), operation=op.id, code=code, **extra))
 
     def _match(self, leg, bar, available_volume):
         inst = self.ledger.instruments[leg.instrument]
+        auction = isinstance(bar, Auction)
+        opening_price = bar.price if auction else bar.open
         if bar.suspended or bar.volume == 0 or (inst.expiry and bar.trading_date > inst.expiry):
             return None
-        if leg.buy and bar.upper_limit is not None and bar.open >= bar.upper_limit:
+        if leg.buy and bar.upper_limit is not None and opening_price >= bar.upper_limit:
             return None
-        if not leg.buy and bar.lower_limit is not None and bar.open <= bar.lower_limit:
+        if not leg.buy and bar.lower_limit is not None and opening_price <= bar.lower_limit:
             return None
         cfg = self.execution_by_instrument.get(inst.id, self.config)
         qty = min(leg.quantity, available_volume)
@@ -170,30 +238,40 @@ class Engine:
             qty = qty // inst.lot * inst.lot
         if not qty:
             return None
-        price = bar.open + (1 if leg.buy else -1) * cfg.slippage_ticks * inst.tick
-        if price < bar.low or price > bar.high:
+        price = opening_price if auction else opening_price + (1 if leg.buy else -1) * cfg.slippage_ticks * inst.tick
+        if not auction and (price < bar.low or price > bar.high):
             return None
         if (bar.upper_limit is not None and price > bar.upper_limit) or (bar.lower_limit is not None and price < bar.lower_limit):
             return None
-        fee = qty * cfg.fee_per_unit + qty * abs(price) * inst.multiplier * cfg.fee_rate
-        if leg.effect == "close" and cfg.close_today_fee_per_unit is not None:
-            remaining, today = qty, 0
-            for lot in self.ledger.lots:
-                if (lot.instrument, lot.side, lot.group) == (leg.instrument, leg.side, leg.group):
-                    used = min(remaining, lot.quantity)
-                    if lot.trading_date == bar.trading_date:
-                        today += used
-                    remaining -= used
-                    if not remaining:
-                        break
-            fee += today * (cfg.close_today_fee_per_unit - cfg.fee_per_unit)
-        return Fill(bar.start, bar.trading_date, replace(leg, quantity=qty), price, fee)
+        fee = self._fee_quote(leg, qty, price, bar.trading_date, cfg)['total']
+        return Fill(bar.time if auction else bar.start, bar.trading_date, replace(leg, quantity=qty), price, fee)
+
+    def _fee_quote(self, leg, quantity, price, day, cfg, lots=None, balance=None):
+        if lots is None and leg.effect == "close":
+            lots = tuple((p.quantity, p.trading_date == day) for p in self.ledger.lots
+                         if (p.instrument, p.side, p.group) == (leg.instrument, leg.side, leg.group))
+        return self.fees.quote(leg, quantity, price, day, self.ledger.instruments[leg.instrument], cfg, lots or (), balance)
+
+    def _execution_view(self, at, day, phase, marks, quote=None):
+        # Shallow read-only valuation view reuses the actual Ledger snapshot logic;
+        # no cash, lots, history, or actual marks are changed for the observation.
+        view = copy(self.ledger)
+        view.marks = {**self.ledger.marks, **marks}
+        return ExecutionContext(at,day,phase,MappingProxyType(view.marks),
+                                tuple(MappingProxyType(dict(p.__dict__)) for p in self.ledger.lots),
+                                view.snapshot(self.margin_rules),quote)
 
     def step(self, frame: Frame, on_bar: Callable | None = None, on_day_end: Callable | None = None):
         if frame.time.tzinfo is None or (self.now and frame.time <= self.now):
             raise ValueError("Frames must be aware and strictly ordered")
         if any(b.end != frame.time or key != b.instrument for key, b in frame.bars.items()):
             raise ValueError("Bars must share the frame end")
+        if frame.bars.keys() & frame.auctions.keys():
+            raise ValueError("Instrument cannot have both a bar and auction in one frame")
+        if any(not isinstance(a,Auction) or a.time != frame.time or key != a.instrument
+               or key not in self.ledger.instruments for key,a in frame.auctions.items()):
+            raise ValueError("Invalid auction identity/time")
+        quotes = {**frame.bars, **frame.auctions}
         references = {i: D(p) for i, p in (frame.valuation_marks or {}).items()}
         if not references.keys() <= self.ledger.instruments.keys():
             raise ValueError("Unknown valuation reference instrument")
@@ -206,8 +284,8 @@ class Engine:
                 ex_holdings = {p.instrument for p in self.ledger.lots
                                if any(c["event"].instrument == p.instrument and c["event"].ex_date == frame.accounting_day_start
                                       for c in self.accounting_events.claims)}
-                if not ex_holdings <= frame.bars.keys() | references.keys():
-                    raise ValueError(f"Missing ex-date raw valuation: {sorted(ex_holdings - frame.bars.keys() - references.keys())}")
+                if not ex_holdings <= quotes.keys() | references.keys():
+                    raise ValueError(f"Missing ex-date raw valuation: {sorted(ex_holdings - quotes.keys() - references.keys())}")
                 self.accounting_events.begin(frame.accounting_day_start, self.ledger)
             day = self.accounting_events.current_day
             if day is None:
@@ -215,7 +293,7 @@ class Engine:
             if frame.accounting_day_end is not None and frame.accounting_day_end != day:
                 raise ValueError("Accounting end date mismatch")
         self.now = frame.time
-        budgets = {i: int(b.volume * self.execution_by_instrument.get(i, self.config).participation) for i, b in frame.bars.items()}
+        budgets = {i: int(b.volume * self.execution_by_instrument.get(i, self.config).participation) for i, b in quotes.items()}
         # Eligibility is decided before any fill; all closing legs precede all opening legs.
         pending = sorted([o for o in self.operations if o.state in ("pending", "unwinding")], key=lambda o: (not any(l.effect == "close" for l in o.legs), o.id))
         eligible = []
@@ -227,19 +305,57 @@ class Engine:
             if not op.combination and not any(l.instrument in frame.open_instruments for l in op.legs):
                 continue
             # Never execute at a bar open earlier than the decision.
-            if any(b.start < op.submitted for i, b in frame.bars.items() if i in op.original_instruments):
+            if any((b.time if isinstance(b,Auction) else b.start) < op.submitted for i, b in quotes.items() if i in op.original_instruments):
                 continue
-            op.attempts += 1
+            # Auction matching is an extra opportunity, not a continuous-Bar retry.
+            if not (frame.auctions and (op.original_instruments.intersection(frame.auctions)
+                                        or not op.original_instruments.intersection(frame.bars))):
+                op.attempts += 1
             eligible.append(op)
+        quote_times = {i:(q.time if isinstance(q,Auction) else q.start) for i,q in quotes.items()}
+        def opening_marks(at):
+            return {i:(q.price if isinstance(q,Auction) else q.open) for i,q in quotes.items() if quote_times[i]<=at}
+        if self.execution_observer:
+            for at in sorted(set(quote_times.values())):
+                current = next(q for i,q in quotes.items() if quote_times[i]==at)
+                phase = 'auction' if isinstance(current,Auction) else 'continuous'
+                self.execution_observer(self._execution_view(at,current.trading_date,phase,opening_marks(at)), 'open')
         remaining_by_id = {o.id: [] for o in eligible}
         ordered_legs = sorted([(o, j, l) for o in eligible for j, l in enumerate(o.legs)], key=lambda item: (item[2].effect != "close", item[0].id, item[1]))
         for op, _, leg in ordered_legs:
-            bar = frame.bars.get(leg.instrument)
+            bar = quotes.get(leg.instrument)
             fill = self._match(leg, bar, budgets.get(leg.instrument, 0)) if bar and leg.instrument in frame.open_instruments else None
+            if fill and self.execution_guard:
+                maximum = fill.instruction.quantity
+                cfg=self.execution_by_instrument.get(leg.instrument,self.config)
+                inst=self.ledger.instruments[leg.instrument]
+                today_lots=tuple((p.quantity,p.trading_date==fill.trading_date) for p in self.ledger.lots
+                                 if (p.instrument,p.side,p.group)==(leg.instrument,leg.side,leg.group))
+                quote_unit=inst.lot if leg.effect=='open' else 1
+                fee_balance=self.fees.balances.get((fill.trading_date,leg.instrument,leg.side),0)
+                def quote_quantity(quantity,_template=fill,_maximum=maximum,_cfg=cfg,_lots=today_lots,_unit=quote_unit,_balance=fee_balance):
+                    if type(quantity) is not int or not 0<quantity<=_maximum or quantity%_unit:
+                        raise ValueError('Invalid candidate quantity')
+                    fee=self._fee_quote(_template.instruction,quantity,_template.price,
+                                        _template.trading_date,_cfg,_lots,_balance)['total']
+                    return replace(_template,instruction=replace(_template.instruction,quantity=quantity),fee=fee)
+                context = self._execution_view(fill.time,fill.trading_date,'auction' if isinstance(bar,Auction) else 'continuous',
+                                               opening_marks(fill.time),quote_quantity)
+                allowed = self.execution_guard(context,fill)
+                unit = self.ledger.instruments[leg.instrument].lot if leg.effect=='open' else 1
+                if type(allowed) is not int or not 0<=allowed<=maximum or allowed%unit:
+                    raise ValueError('Execution guard may only shrink or defer valid quantities')
+                fill = quote_quantity(allowed) if allowed else None
             if fill:
+                detail = self._fee_quote(fill.instruction, fill.instruction.quantity, fill.price,
+                                         fill.trading_date, self.execution_by_instrument.get(leg.instrument, self.config))
                 self.ledger.apply(fill)
+                self.fees.commit(fill, detail)
                 budgets[leg.instrument] -= fill.instruction.quantity
                 op.filled.append(fill.instruction)
+                if self.execution_observer:
+                    self.execution_observer(self._execution_view(fill.time,fill.trading_date,'auction' if isinstance(bar,Auction) else 'continuous',
+                                                                 opening_marks(fill.time)), 'after_fill')
                 if fill.instruction.quantity < leg.quantity:
                     remaining_by_id[op.id].append(replace(leg, quantity=leg.quantity - fill.instruction.quantity))
             else:
@@ -274,8 +390,12 @@ class Engine:
         self.ledger.marks.update(references)
         for i, b in frame.bars.items():
             self.ledger.marks[i] = b.close
+        for i, auction in frame.auctions.items():
+            self.ledger.marks[i] = auction.price
         if on_bar:
             on_bar(StrategyContext(self, frame))
+        if self.execution_observer:
+            self.execution_observer(self._execution_view(frame.time,frame.time.date(),'valuation',{}),'minute_close')
         provided = {i for i, _, _ in frame.settlements}
         required = {p.instrument for p in self.ledger.lots if p.instrument in frame.settle_instruments and self.ledger.instruments[p.instrument].asset in (Asset.FUTURE, Asset.OPTION)}
         if not required <= provided:
@@ -301,6 +421,8 @@ class Engine:
         if frame.accounting_day_end:
             self.accounting_events.end(frame.accounting_day_end, self.ledger, self.margin_rules)
         snapshot = self.ledger.snapshot(self.margin_rules)
+        if self.execution_observer and frame.settlements:
+            self.execution_observer(self._execution_view(frame.time,frame.time.date(),'settlement',{}),'settlement')
         for group, state in self.groups.items():
             held = {(p.instrument, p.side) for p in self.ledger.lots if p.group == group}
             active = [o for o in self.operations if o.state in ("pending", "unwinding") and any(l.group == group for l in o.legs)]

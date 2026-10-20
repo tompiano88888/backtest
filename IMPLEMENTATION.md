@@ -25,3 +25,11 @@
 ## 发布验证
 
 仅含框架的隔离副本：119 项测试通过，源码编译通过；组合示例 PnL 52、四条警示，分红及计息合成场景运行通过。测试临时目录显式放在发布副本 outputs 下，未使用本地策略代码或下载数据。
+
+## 2026-10-20 手续费框架增量
+
+FeeService统一普通Bar、离散Auction及执行前缩量报价；实际成交才消耗计费余额并输出交易所费用、佣金及规则来源。fifo保持真实指定group的FIFO计费；today_first跨group按同合约同方向先抵日内开仓量，昨多10/今开3/平5计3手平今、2手普通，真实成本与group归属不变。先平后开不追补，对锁开仓收开仓费。
+
+ExecutionConfig提供commission_rate/commission_per_unit（默认零），fee_mode=fixed/historical及fee_matching=fifo/today_first；runner指令/回调共用，合约配置完整替换全局。历史模式显式选择，按固定DuckDB版本/as_of解析交易日规则，缺失和重叠冲突报错，禁止回退；修复平今比例费用JSON解析与非有限/负费用校验。
+
+还包含标准离散竞价、只读成交观察、单合约group目标、可选执行期开盘复核/观察接口，默认不加入资金准入限制。新增合成测试独立于策略研究模块。完整V1和历史供应商真实性/PIT仍未全面验收；详见docs/EXECUTION_FEES.md及docs/INDEX_FUTURES_FEES.md。

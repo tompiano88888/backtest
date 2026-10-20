@@ -85,3 +85,13 @@ CLI update 改用 `normalization`（代码、列、单位和分钟时间戳边�
 接口参考：https://quantapi.51ifind.com/gwstatic/static/ds_web/quantapi-web/help-center/manual.html
 
 ETF 分红元数据：`backtest.ifind_etf_dividends.read_events(store, version, code, as_of=None)` 返回固定快照的 Decimal 每份现金及独立事件日期。as_of 为策略 PIT 过滤；未传用于事后账务资料。详见 [ETF 分红](ETF_DIVIDENDS.md)。
+
+## 2026-10-20 费用、竞价与执行观察接口
+
+ExecutionConfig新增fee_mode（默认fixed，可选historical）、fee_matching（默认fifo，可选today_first）、close_today_fee_rate、commission_rate及commission_per_unit。基础费用与佣金分别计算，平今减免不减免佣金；按实际成交价和数量计算。today_first跨group按同合约同方向先抵当日开仓量，不修改FIFO成本；仅先开后平。完整字段及研究输入示例见[手续费配置](EXECUTION_FEES.md)。
+
+runner.engine_from_config和run_scenario指令/回调共用execution、execution_by_instrument及historical_fees。合约execution完整替换全局，不逐字段继承。HistoricalFees(root,version,as_of)读取已关闭写连接的DuckDB标准fee_rule，按交易日匹配历史区间；缺失或冲突报错。publish_fee_snapshot可发布费用元数据快照，无需虚构行情Bar。下载和独立审计见[历史手续费](INDEX_FUTURES_FEES.md)，Git不携带实际数据库或原始缓存。
+
+runner.result新增fee_details与fee_provenance，逐笔费用拆分合计与Fill.fee、Ledger手续费现金流一致。slippage_ticks作用于连续Bar，离散Auction按结果价零滑点；竞价费用和成交约束照常执行，仅此前提交指令可参与。Frame.auctions与ctx.auctions提供标准竞价事件，竞价不计组合三次连续Bar重试时钟。
+
+ctx.fills_since(index=0)返回不可变成交元组。ctx.target_group(instrument,quantity,group)为独立单合约group设置持续目标，禁止操作组合group。Engine可选execution_guard允许按成交前只读开盘/竞价账户状态缩量或暂缓；ExecutionContext.fill_for_quantity提供无副作用的同源费用报价。execution_observer在open/after_fill/minute_close/settlement提供只读观察，默认关闭。详见[分钟层验收](MINUTE_ENGINE_ACCEPTANCE.md)。
