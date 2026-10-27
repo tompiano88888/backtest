@@ -108,3 +108,18 @@ def test_non_akshare_snapshot_rejected(tmp_path):
         version = store.publish(download(cfg, stock_api()), 'ifind', '1d')
     with pytest.raises(ValueError, match='AKShare snapshot'):
         run(cfg, tmp_path, version)
+
+
+def test_standard_report_preserves_snapshot_execution(tmp_path):
+    import json
+    from backtest.runner import result
+    cfg = config()
+    version = update(cfg, tmp_path / 'store', stock_api())
+    original, original_cfg = run(cfg, tmp_path / 'store', version)
+    reported, reported_cfg = run(cfg, tmp_path / 'store', version,
+                                  report_output=tmp_path / 'reported')
+    assert reported_cfg == original_cfg
+    assert result(reported, reported_cfg) == result(original, original_cfg)
+    report = tmp_path / 'reported' / 'standard_report'
+    assert D(json.loads((report / 'metrics.json').read_text(encoding='utf-8'))['pnl']) == D(100)
+    assert (report / 'performance.png').read_bytes().startswith(b'\x89PNG')

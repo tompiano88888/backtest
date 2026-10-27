@@ -160,6 +160,11 @@ def scenario(config, root, version):
     return json.loads(json.dumps(cfg, default=json_default))
 
 
-def run(config, root, version, on_bar=None):
+def run(config, root, version, on_bar=None, *, report_output=None):
     cfg = scenario(config, root, version)
-    return run_scenario(cfg, on_bar), cfg
+    engine = run_scenario(cfg, on_bar)
+    if report_output is not None:
+        from .runner import result
+        from .performance import export_scenario_report
+        export_scenario_report(result(engine, cfg), cfg, report_output)
+    return engine, cfg

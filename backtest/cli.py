@@ -39,6 +39,8 @@ def main():
             output = Path(args.output)
             output.parent.mkdir(parents=True, exist_ok=True)
             output.write_text(json.dumps(report, default=json_default, ensure_ascii=False, indent=2), encoding='utf-8')
+            from .performance import export_scenario_report
+            export_scenario_report(report, cfg, output.parent / output.stem)
             print(f'Result: {output.resolve()}')
     except (ValueError, KeyError, TypeError, OSError, ImportError) as error:
         parser.exit(2, f'AKShare daily task failed: {error}\n')

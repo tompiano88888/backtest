@@ -7,7 +7,7 @@ name = "cn-backtest"
 version = "0.1.0"
 description = "AKShare stock and futures daily backtesting"
 requires-python = ">=3.12"
-dependencies = ["duckdb>=1.1,<2", "pyarrow>=18,<26", "tzdata>=2025.1", "pytz>=2025.1", "akshare>=1.18,<2"]
+dependencies = ["duckdb>=1.1,<2", "pyarrow>=18,<26", "tzdata>=2025.1", "pytz>=2025.1", "akshare>=1.18,<2", "matplotlib>=3.9,<4"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<10"]

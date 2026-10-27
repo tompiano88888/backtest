@@ -220,3 +220,8 @@
 ## 2026-10-27 AKShare 分支范围
 
 用户明确要求 `backtest_akshare` 仅使用 AKShare 获取股票、期货日线。此要求覆盖本文件原 iFinD 和分钟／期权范围约定。本分支公共入口为 `backtest.akshare_daily` 和 CLI update/run；保留统一撮合、账务与费用核心，不新增独立执行路径。原代码仅作历史及回归参考。AKShare 没有返回的历史元数据不得虚构；当前须显式配置历史时段、合约、涨跌停及研究费率，缺结算价不回退收盘价。完整范围及未验收部分见 README.md、IMPLEMENTATION.md。
+
+
+## 2026-10-27 标准绩效输出
+
+仅同步主框架的标准报表功能。完整 AKShare CLI 回测默认输出图片及年度/逐日指标；后续完整研究入口须调用报表 finalizer。数据源、策略、撮合和账务规则不变。接口、配色和指标定义见 [docs/STANDARD_PERFORMANCE.md](docs/STANDARD_PERFORMANCE.md)。
