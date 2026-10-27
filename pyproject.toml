@@ -5,9 +5,9 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "cn-backtest"
 version = "0.1.0"
-description = "Chinese multi-asset historical simulation infrastructure"
+description = "AKShare stock and futures daily backtesting"
 requires-python = ">=3.12"
-dependencies = ["duckdb>=1.1,<2", "pyarrow>=18,<26", "tzdata>=2025.1", "pytz>=2025.1"]
+dependencies = ["duckdb>=1.1,<2", "pyarrow>=18,<26", "tzdata>=2025.1", "pytz>=2025.1", "akshare>=1.18,<2"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<10"]

@@ -1,3 +1,5 @@
+> 2026-10-27 `backtest_akshare` 分支覆盖说明：当前公共入口仅支持 AKShare 股票、实际期货合约日线。原 iFinD／分钟／期权内容是继承的历史记录，不是本分支支持承诺。当前配置、接口、限制与运行方式以 README.md 和 backtest/akshare_daily.py 为准。
+
 # 框架接口
 
 行情 `Bar` 可保留 `settlement_price`（当日结算价）和 `previous_settlement_price`（供应商前结算价），均使用 Decimal。前结算价不从相邻记录推算，也不替代当日结算基准；旧 Parquet 缺此前结算字段时读取为 None。

@@ -1,0 +1,46 @@
+{
+  "initial_cash": "10000",
+  "frequency": "1d",
+  "instruments": [
+    {
+      "id": "600000.SH",
+      "asset": "equity",
+      "account": "security",
+      "exchange": "SSE",
+      "product": "stock",
+      "lot": 100,
+      "sell_delay_days": 1
+    }
+  ],
+  "symbols": {
+    "600000.SH": "600000"
+  },
+  "execution": {
+    "participation": "1"
+  },
+  "instructions": [
+    {
+      "at": "2024-01-02T15:00:00+08:00",
+      "instrument": "600000.SH",
+      "quantity": 100
+    }
+  ],
+  "sessions": [
+    {
+      "instrument": "600000.SH",
+      "trading_date": "2024-01-02",
+      "start": "2024-01-02T09:30:00+08:00",
+      "end": "2024-01-02T15:00:00+08:00",
+      "upper_limit": "20",
+      "lower_limit": "1"
+    },
+    {
+      "instrument": "600000.SH",
+      "trading_date": "2024-01-03",
+      "start": "2024-01-03T09:30:00+08:00",
+      "end": "2024-01-03T15:00:00+08:00",
+      "upper_limit": "20",
+      "lower_limit": "1"
+    }
+  ]
+}
