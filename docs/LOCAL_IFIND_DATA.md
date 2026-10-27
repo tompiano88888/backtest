@@ -1,5 +1,7 @@
 # 本地 iFinD 数据目录与结构
 
+2026-10-19增量：四个全收益指数H00300.CSI/H00016.CSI/H00905.CSI/H00852.CSI共21379条日线已独立存储data/index_total_return，固定版本3f899b4d11604eef86a318e7496f9741，截止2026-10-08。IH自2003-12-31，其余自2004-12-31；回溯起点不代表发布日期，不作撮合资产。验证报告outputs/ifind-index-total-return-validation.json，采集配置examples/ifind.index-total-return-daily.json。与旧目录及以下旧清单分开，不覆盖原版本。
+
 核对日期：2026-10-12。依据本机 DuckDB 表、已发布版本清单和 Parquet Schema，
 明细机器清单见 `outputs/ifind-local-data-inventory.json`。本次只核对结构和清单，
 未重新联网下载、未重新执行全量业务验收。下列条数按指定快照统计，不能将

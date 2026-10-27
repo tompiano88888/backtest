@@ -7,9 +7,11 @@
 
 ```powershell
 .venv\Scripts\python.exe -m backtest run examples/account_events.synthetic.json --output outputs/account_events/result.json
+.venv\Scripts\python.exe -m scripts.run_cash_carry_callback --scenario examples/cash_carry_callback.accounting.synthetic.json --output outputs/cash_carry_callback_accounting/result.json
 ```
 
-示例使用合成行情与显式账户事件，不代表真实历史或税法验证。
+两者均为合成案例，不是实盘历史或税法验证。第二个使用此前导出的真实参数批次，
+行情与分红仍是合成数据；套利价格PnL与净分红合计200元，加闲置资金收益0.30392841元。
 
 ## 配置
 
@@ -43,7 +45,7 @@
 }
 ```
 
-年率示例为显式模拟假设，不代表真实回购行情。`idle_cash`省略或
+年率示例沿用先前用户指定的研究假设，不代表真实回购行情。`idle_cash`省略或
 `enabled=false`关闭收益；分红必须显式列出或指定固定快照，不能把无数据解释为无分红。
 `withholding_rate`默认0，表示未扣税假设，不能据此认定股票依法免税。
 

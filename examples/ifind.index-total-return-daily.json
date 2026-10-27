@@ -1,0 +1,11 @@
+{
+  "start": "1990-01-01",
+  "end": "2026-10-08",
+  "instruments": {
+    "H00300.CSI": {"asset": "index", "product": "IF", "name": "沪深300全收益"},
+    "H00016.CSI": {"asset": "index", "product": "IH", "name": "上证50全收益"},
+    "H00905.CSI": {"asset": "index", "product": "IC", "name": "中证500全收益"},
+    "H00852.CSI": {"asset": "index", "product": "IM", "name": "中证1000全收益"}
+  },
+  "cache": "data/index_total_return/staging/20261019"
+}

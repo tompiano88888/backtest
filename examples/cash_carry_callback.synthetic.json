@@ -1,0 +1,240 @@
+{
+  "initial_cash": "2000",
+  "instruments": [
+    {
+      "id": "IF2001.CFE",
+      "asset": "future",
+      "account": "futures",
+      "exchange": "CFE",
+      "product": "IF",
+      "multiplier": "10",
+      "tick": "1",
+      "expiry": "2020-01-17",
+      "delivery": "2020-01-17"
+    },
+    {
+      "id": "510300.SH",
+      "asset": "fund",
+      "account": "security",
+      "exchange": "SSE",
+      "product": "ETF",
+      "lot": 100,
+      "sell_delay_days": 1
+    },
+    {
+      "id": "000300.SH",
+      "asset": "index",
+      "account": "security",
+      "exchange": "SSE",
+      "product": "INDEX"
+    }
+  ],
+  "margin_rules": {
+    "IF2001.CFE": {
+      "model": "future",
+      "rate": ".15"
+    }
+  },
+  "execution": {
+    "participation": "1"
+  },
+  "frames": [
+    {
+      "time": "2020-01-02T15:00:00+08:00",
+      "bars": [
+        {
+          "instrument": "IF2001.CFE",
+          "start": "2020-01-02T14:59:00+08:00",
+          "end": "2020-01-02T15:00:00+08:00",
+          "trading_date": "2020-01-02",
+          "open": "110",
+          "close": "110",
+          "high": "120",
+          "low": "1",
+          "volume": 100000
+        },
+        {
+          "instrument": "510300.SH",
+          "start": "2020-01-02T14:59:00+08:00",
+          "end": "2020-01-02T15:00:00+08:00",
+          "trading_date": "2020-01-02",
+          "open": "1",
+          "close": "1",
+          "high": "120",
+          "low": "1",
+          "volume": 100000
+        },
+        {
+          "instrument": "000300.SH",
+          "start": "2020-01-02T14:59:00+08:00",
+          "end": "2020-01-02T15:00:00+08:00",
+          "trading_date": "2020-01-02",
+          "open": "100",
+          "close": "100",
+          "high": "120",
+          "low": "1",
+          "volume": 100000
+        }
+      ],
+      "open_instruments": [
+        "IF2001.CFE",
+        "510300.SH",
+        "000300.SH"
+      ]
+    },
+    {
+      "time": "2020-01-03T09:31:00+08:00",
+      "bars": [
+        {
+          "instrument": "IF2001.CFE",
+          "start": "2020-01-03T09:30:00+08:00",
+          "end": "2020-01-03T09:31:00+08:00",
+          "trading_date": "2020-01-03",
+          "open": "110",
+          "close": "110",
+          "high": "120",
+          "low": "1",
+          "volume": 100000
+        },
+        {
+          "instrument": "510300.SH",
+          "start": "2020-01-03T09:30:00+08:00",
+          "end": "2020-01-03T09:31:00+08:00",
+          "trading_date": "2020-01-03",
+          "open": "1",
+          "close": "1",
+          "high": "120",
+          "low": "1",
+          "volume": 100000
+        },
+        {
+          "instrument": "000300.SH",
+          "start": "2020-01-03T09:30:00+08:00",
+          "end": "2020-01-03T09:31:00+08:00",
+          "trading_date": "2020-01-03",
+          "open": "100",
+          "close": "100",
+          "high": "120",
+          "low": "1",
+          "volume": 100000
+        }
+      ],
+      "open_instruments": [
+        "IF2001.CFE",
+        "510300.SH",
+        "000300.SH"
+      ]
+    },
+    {
+      "time": "2020-01-03T15:00:00+08:00",
+      "bars": [
+        {
+          "instrument": "IF2001.CFE",
+          "start": "2020-01-03T14:59:00+08:00",
+          "end": "2020-01-03T15:00:00+08:00",
+          "trading_date": "2020-01-03",
+          "open": "90",
+          "close": "90",
+          "high": "120",
+          "low": "1",
+          "volume": 100000
+        },
+        {
+          "instrument": "510300.SH",
+          "start": "2020-01-03T14:59:00+08:00",
+          "end": "2020-01-03T15:00:00+08:00",
+          "trading_date": "2020-01-03",
+          "open": "1",
+          "close": "1",
+          "high": "120",
+          "low": "1",
+          "volume": 100000
+        },
+        {
+          "instrument": "000300.SH",
+          "start": "2020-01-03T14:59:00+08:00",
+          "end": "2020-01-03T15:00:00+08:00",
+          "trading_date": "2020-01-03",
+          "open": "100",
+          "close": "100",
+          "high": "120",
+          "low": "1",
+          "volume": 100000
+        }
+      ],
+      "open_instruments": [
+        "IF2001.CFE",
+        "510300.SH",
+        "000300.SH"
+      ],
+      "settle_instruments": [
+        "IF2001.CFE",
+        "510300.SH"
+      ],
+      "settlements": [
+        {
+          "instrument": "IF2001.CFE",
+          "trading_date": "2020-01-03",
+          "settlement_price": "90"
+        }
+      ]
+    },
+    {
+      "time": "2020-01-06T09:31:00+08:00",
+      "bars": [
+        {
+          "instrument": "IF2001.CFE",
+          "start": "2020-01-06T09:30:00+08:00",
+          "end": "2020-01-06T09:31:00+08:00",
+          "trading_date": "2020-01-06",
+          "open": "90",
+          "close": "90",
+          "high": "120",
+          "low": "1",
+          "volume": 100000
+        },
+        {
+          "instrument": "510300.SH",
+          "start": "2020-01-06T09:30:00+08:00",
+          "end": "2020-01-06T09:31:00+08:00",
+          "trading_date": "2020-01-06",
+          "open": "1",
+          "close": "1",
+          "high": "120",
+          "low": "1",
+          "volume": 100000
+        },
+        {
+          "instrument": "000300.SH",
+          "start": "2020-01-06T09:30:00+08:00",
+          "end": "2020-01-06T09:31:00+08:00",
+          "trading_date": "2020-01-06",
+          "open": "100",
+          "close": "100",
+          "high": "120",
+          "low": "1",
+          "volume": 100000
+        }
+      ],
+      "open_instruments": [
+        "IF2001.CFE",
+        "510300.SH",
+        "000300.SH"
+      ]
+    }
+  ],
+  "cash_carry": {
+    "decision_times": [
+      "2020-01-02T15:00:00+08:00",
+      "2020-01-03T15:00:00+08:00"
+    ],
+    "front_contracts": {
+      "2020-01-02": {
+        "IF": "IF2001.CFE"
+      }
+    },
+    "max_lots": 1
+  },
+  "data_version": "synthetic-cash-carry-callback-v1",
+  "description": "SYNTHETIC ONLY: hand-checkable callback plumbing, not historical IF prices"
+}

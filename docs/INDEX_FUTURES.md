@@ -1,5 +1,28 @@
 # 股指期货历史日线
 
+## 当月／下月跨期价差研究
+
+离线入口：`.venv\Scripts\python.exe -m scripts.analyze_index_futures_spread`。
+默认读取最新快照并立即固定版本；用 `--version VERSION` 重现指定版本。
+默认读取关联行情版本的 futures_contract_snapshots，固定 revision 清单；
+用 `--metadata-version VERSION` 固定元数据版本。537 个合约资料已下载，详见
+[合约元数据](INDEX_FUTURES_METADATA.md)。当前 expiry 与 delivery 一致；未来若不同，
+程序明确要求核对换月口径。资料用于事后统计，不冒充历史策略可见的 PIT 信息。
+上市首月使用最早挂牌月份（如 IF 在 2010-04-16 使用 IF1005/IF1006）。
+缺少关联元数据时退出码为 2，并输出 BLOCKED.md、blocked.json 和 missing_deliveries.csv。
+
+也可以依据可靠历史记录填写 CSV 的 `instrument,delivery,source`（日期为 YYYY-MM-DD，
+source 保留官方记录出处），然后传入 `--deliveries PATH`。
+绘图需要研究依赖：安装 `.[research]`。程序不联网取数，不从最后行情日期推断交割日。
+自然月合约交割日仍是近月，交割之后使用随后两个连续月份；缺少相邻月份时留空，
+不替代为季月。统计基准是各品种已观察日期并集，不能发现所有合约同时缺行情的日期。
+
+完整运行输出 `daily.csv`、`statistics.csv`、`provenance.json`、`REPORT.md`、
+`spreads.png` 和 `distributions.png`。价差为下月减当月，收盘为主、结算对照；
+相对价差为价差除以近月收盘，以比例保存。统计包含全期及逐年样本数、缺失数、
+均值、中位数、样本标准差、极值及所有对应日期、线性插值分位数和正负零占比。
+输入快照逐文件核对 SHA256 和行数，交割 CSV 指纹写入报告，原始数据保持不变。
+
 2026-10-09 已从 iFinD 下载并发布 IF、IC、IM、IH 实际月份合约历史日线；不混入主连或连续合约。供应商字段由用户的 SuperCommand 命令确认，历史访问从 2010-01-01 开始，完整交易日截止 2026-10-08。
 
 | 品种 | 合约数 | 日线条数 | 最早交易日 | 最新交易日 |

@@ -54,13 +54,14 @@ def main():
     parser.add_argument("config", nargs="?", default="examples/ifind.index-etf-daily.json")
     parser.add_argument("--root", default="data/index_etf")
     parser.add_argument("--publish-only", action="store_true")
+    parser.add_argument("--report", default="outputs/ifind-index-etf-validation.json")
     args = parser.parse_args()
     config = json.loads(Path(args.config).read_text(encoding="utf-8-sig"))
     batches = acquire(config, args.publish_only)
     from backtest.ifind_index_etf import publish_daily
     with Store(args.root) as store:
         version, report = publish_daily(store, batches, config)
-    output = Path("outputs/ifind-index-etf-validation.json")
+    output = Path(args.report)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report, default=json_default, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"Published {version}: {report['total_rows']} rows")

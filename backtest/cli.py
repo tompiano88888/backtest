@@ -9,7 +9,7 @@ from pathlib import Path
 from .models import Bar, D
 from .pipeline import IFinDSource, prepare_ifind_update, update_ifind
 from .ifind import IFinDError, credentials_present, load_sdk, request_function
-from .runner import result, run_scenario
+from .runner import result, run_scenario, save_result
 from .storage import Store, bar_from_record, json_default
 
 
@@ -59,7 +59,7 @@ def main():
         engine = run_scenario(cfg)
         output = Path(args.output)
         output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(json.dumps(result(engine, cfg), default=json_default, ensure_ascii=False, indent=2), encoding="utf-8")
+        save_result(engine, cfg, output)
         print(f"Result: {output.resolve()}")
         print(f"PnL: {engine.ledger.snapshot(engine.margin_rules).pnl}; warnings: {len(engine.warnings)}")
     elif args.command == "ingest":
