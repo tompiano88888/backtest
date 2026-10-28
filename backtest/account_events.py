@@ -156,22 +156,7 @@ def from_config(config):
     records = list(config.get("dividends", []))
     source = config.get("dividend_snapshot")
     if source:
-        import duckdb
-        from pathlib import Path
-        from types import SimpleNamespace
-        from .ifind_etf_dividends import read_events
-        begin, end = date.fromisoformat(source["record_from"]), date.fromisoformat(source["record_to"])
-        if begin > end:
-            raise ValueError("Invalid dividend snapshot date range")
-        with duckdb.connect(str(Path(source["root"]) / "metadata.duckdb"), read_only=True) as db:
-            for code in source["instruments"]:
-                for e in read_events(SimpleNamespace(db=db), source["version"], code):
-                    if begin <= e["record_date"] <= end:
-                        records.append(dict(event_id=f"{code}/{e['announcement_date']}", instrument=code,
-                                            record_date=e["record_date"], ex_date=e["exchange_ex_date"],
-                                            payment_date=e["payment_date"], cash_per_unit=e["cash_per_unit"],
-                                            withholding_rate=source.get("withholding_rate", "0"),
-                                            source=f"etf_dividend_snapshot:{source['version']}", known_at=str(e.get("known_at"))))
+        raise ValueError("Vendor dividend snapshots are not supported in the AKShare branch; provide explicit dividends to the core")
     events = []
     for row in records:
         item = dict(row)

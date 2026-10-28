@@ -198,20 +198,6 @@ def test_disabled_income_retains_existing_results_and_no_clock_needed():
     assert from_config(dict(idle_cash=dict(enabled=False))).idle_cash is None
 
 
-def test_pinned_snapshot_adapter_preserves_known_time_and_filters_record_range(tmp_path, monkeypatch):
-    import duckdb
-    from backtest import ifind_etf_dividends
-    with duckdb.connect(str(tmp_path / "metadata.duckdb")):
-        pass
-    seen = []
-    def read_events(store, version, code):
-        seen.append((version, code))
-        return [dict(instrument=code, announcement_date=date(2026, 9, 1), record_date=date(2026, 9, 18), exchange_ex_date=date(2026, 9, 21), payment_date=date(2026, 9, 22), cash_per_unit=D(".1"), known_at="2026-10-12T09:00:00+08:00")]
-    monkeypatch.setattr(ifind_etf_dividends, "read_events", read_events)
-    source = dict(root=str(tmp_path), version="fixed", instruments=["S"], record_from="2026-09-18", record_to="2026-09-18")
-    events = from_config(dict(dividend_snapshot=source))
-    assert seen == [("fixed", "S")]
-    assert events.dividends[0].known_at == "2026-10-12T09:00:00+08:00"
-    assert events.dividends[0].cash_per_unit == D(".1")
-    source["record_from"] = source["record_to"] = "2026-09-19"
-    assert from_config(dict(dividend_snapshot=source)).dividends == ()
+def test_vendor_dividend_snapshot_rejected_without_importing_adapter():
+    with pytest.raises(ValueError, match="Vendor dividend snapshots"):
+        from_config(dict(dividend_snapshot={"version": "external"}))

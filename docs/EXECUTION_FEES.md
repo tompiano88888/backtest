@@ -1,3 +1,5 @@
+> AKShare公共日线入口只接受显式fixed费用假设，拒绝historical_fees。下方HistoricalFees是保留的通用核心接口及合成测试契约，不代表本分支自动获取历史费率。
+
 # 统一回测手续费与历史费率
 
 手续费由Engine的FeeService统一报价，Ledger按实际Fill.fee扣账。研究层提交数量及运行配置，不提交手续费金额。普通Bar、离散竞价、部分成交与execution_guard缩量报价共用计费逻辑；报价无副作用，仅实际成交更新计费余额。竞价仍零滑点但照常收手续费和佣金。
@@ -78,7 +80,7 @@
 }
 ```
 
-所有rate都是成交名义金额的小数比例，per_unit都是人民币/手（或证券单位），不是万分数原始值。iFinD原字段、单位及有效期必须在适配/导入层核实后标准化。
+所有rate都是成交名义金额的小数比例，per_unit都是人民币/手（或证券单位），不是万分数原始值。供应商原字段、单位及有效期必须在适配/导入层核实后标准化。
 
 ```python
 from backtest.storage import Store
@@ -96,7 +98,6 @@ provider = HistoricalFees("data/execution_fees", version, as_of)
 
 Provider启动时一次性读取固定datasets版本的recorded_at截止与固定as_of以内记录，随后不查询活动数据库。完全相同有效区间的修订选最新可知版本，同一可知时点不同修订或不同区间重叠报错。有效日期按北京时间交易日零点查询。as_of表示本次研究采用的知识截止，不保证该资料在历史成交时已经可知；不能用下载时间伪造历史公告时间。
 
-初始接口开发时仅有合约观察字段，使用合成规则验证。后续2026-10-20已独立下载日期序列并导入537合约、42388合约日历史费用，固定版本及供应商/PIT限制见[历史手续费导入](INDEX_FUTURES_FEES.md)；R-Breaker已显式启用该版本另行重跑，见[重跑说明](RBREAKER_HISTORICAL_FEES.md)。合约观察字段仍不能代替历史规则序列。
 
 ## 审计输出
 

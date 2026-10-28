@@ -161,10 +161,17 @@ def scenario(config, root, version):
     return json.loads(json.dumps(cfg, default=json_default))
 
 
-def run(config, root, version, on_bar=None, *, report_output=None, strategy=None):
+def run(config, root, version, on_bar=None, *, report_output=None, strategy=None, output=None):
+    if output is not None and report_output is not None:
+        raise ValueError('Choose output for complete results or report_output for legacy report-only export')
     cfg = scenario(config, root, version)
     # strategy=dict(name=..., params=...) or callback.strategy_params land in provenance.strategy.
     engine = run_scenario(cfg, on_bar, strategy=strategy)
+    if output is not None:
+        from .runner import save_result
+        save_result(engine, cfg, output, extra_assumptions=[
+            'daily_bar_liquidity_not_intraday_path', 'explicit_historical_contract_rules',
+            'no_automatic_corporate_actions'])
     if report_output is not None:
         from .runner import result
         from .performance import export_scenario_report

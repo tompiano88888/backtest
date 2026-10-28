@@ -87,7 +87,7 @@ def strategy_identity(callback, name=None, params=None):
                 source_sha256=hashlib.sha256(source.encode()).hexdigest() if source else None)
 
 
-def run_scenario(config, on_bar=None, *, strategy=None):
+def run_scenario(config, on_bar=None, *, output=None, strategy=None):
     """Explicit frame replay for reproducible tests and normalized research inputs."""
     engine = engine_from_config(config)
     # Resolved before any frame runs so unserializable parameters fail immediately.
@@ -121,7 +121,22 @@ def run_scenario(config, on_bar=None, *, strategy=None):
     if index < len(inputs):
         engine.warnings.append(dict(code="INPUT_AFTER_BACKTEST_END", count=len(inputs) - index))
     engine.finalize()
+    if output is not None:
+        save_result(engine, config, output)
     return engine
+
+
+def save_result(engine, config, path, *, extra_assumptions=()):
+    """Finalize a complete scenario with its JSON and mandatory standard report."""
+    from .performance import export_scenario_report
+    engine.finalize()
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = result(engine, config)
+    payload['assumptions'].extend(extra_assumptions)
+    path.write_text(json.dumps(payload, default=json_default, ensure_ascii=False, indent=2), encoding='utf-8')
+    export_scenario_report(payload, config, path.parent / path.stem)
+    return payload
 
 
 def result(engine, config):

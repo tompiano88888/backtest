@@ -7,7 +7,6 @@ import pytest
 
 from backtest.accounting import Ledger
 from backtest.engine import Engine, ExecutionConfig, Frame
-from backtest.ifind_auction import index_futures_auction
 from backtest.models import Auction, Bar, D, Instruction, MarginRule
 from backtest.runner import run_scenario
 from test_accounting import future
@@ -118,11 +117,3 @@ def test_auction_identity_validation_and_runner_json():
                              trading_date=str(T.date()),price='100',volume=100)])])
     result=run_scenario(config)
     assert result.ledger.fills[0].price==100
-
-
-def test_vendor_auction_adapter_requires_exact_daily_open_match():
-    row=dict(instrument='A',source_timestamp=T.replace(tzinfo=None),open='100',high='100',low='100',close='100',volume='5.0')
-    result=index_futures_auction(row,T.date(),D(100))
-    assert result.time==T and result.price==100 and result.volume==5
-    with pytest.raises(ValueError,match='daily open'):
-        index_futures_auction(row,T.date(),D(101))

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from .models import Bar, D
 
 from .akshare_daily import run, update, validate
-from .runner import result
+from .runner import save_result
 from .storage import json_default
 
 
@@ -34,13 +34,10 @@ def main():
                 print(update(config, args.root))
         else:
             engine, cfg = run(config, args.root, args.version)
-            report = result(engine, cfg)
-            report['assumptions'] += ['daily_bar_liquidity_not_intraday_path', 'explicit_historical_contract_rules', 'no_automatic_corporate_actions']
             output = Path(args.output)
-            output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_text(json.dumps(report, default=json_default, ensure_ascii=False, indent=2), encoding='utf-8')
-            from .performance import export_scenario_report
-            export_scenario_report(report, cfg, output.parent / output.stem)
+            save_result(engine, cfg, output, extra_assumptions=[
+                'daily_bar_liquidity_not_intraday_path', 'explicit_historical_contract_rules',
+                'no_automatic_corporate_actions'])
             print(f'Result: {output.resolve()}')
     except (ValueError, KeyError, TypeError, OSError, ImportError) as error:
         parser.exit(2, f'AKShare daily task failed: {error}\n')

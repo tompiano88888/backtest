@@ -62,3 +62,9 @@ def test_previous_settlement_survives_storage_without_replacing_daily_settlement
         loaded = store.bars(version, ["F"], T, T + timedelta(days=1), frequency="1d")
         assert loaded == [original]
         assert loaded[0].settlement_price - loaded[0].previous_settlement_price == D("2.60")
+
+
+def test_generic_pipeline_does_not_label_normalized_data_as_vendor(tmp_path):
+    with Store(tmp_path) as store:
+        version = update(store, lambda: [bar()], lambda value: value, "1m")
+        assert store.db.execute("SELECT source FROM datasets WHERE version=?", [version]).fetchone()[0] == "normalized"

@@ -3,13 +3,9 @@
 2026-10-16：`Engine`调用`AccountingEvents`，全部现金、应收及PnL进入同一`Ledger`。
 策略仍只有只读账户快照和下单接口。未启用配置时，原撮合和资金行为保持。
 
-## 运行示例
+## 核心与公共日线入口边界
 
-```powershell
-.venv\Scripts\python.exe -m backtest run examples/account_events.synthetic.json --output outputs/account_events/result.json
-```
-
-示例使用合成行情与显式账户事件，不代表真实历史或税法验证。
+AKShare日线入口拒绝accounting配置；本页描述通用核心账户事件，不声称数据适配器已提供公司行为。合成例examples/account_events.synthetic.json仅可通过Python run_scenario显式Frame运行，不适用于本分支的AKShare CLI run。
 
 ## 配置
 
@@ -43,32 +39,11 @@
 }
 ```
 
-年率示例为显式模拟假设，不代表真实回购行情。`idle_cash`省略或
-`enabled=false`关闭收益；分红必须显式列出或指定固定快照，不能把无数据解释为无分红。
+年率示例沿用先前用户指定的研究假设，不代表真实回购行情。`idle_cash`省略或
+`enabled=false`关闭收益；分红必须显式列出，不能把无数据解释为无分红。
 `withholding_rate`默认0，表示未扣税假设，不能据此认定股票依法免税。
 
-已下载ETF元数据可用固定快照读取，替代逐条填写；也可与不重复的显式事件并用：
-
-```json
-{
-  "accounting": {
-    "dividend_snapshot": {
-      "root": "data/etf_dividends",
-      "version": "fc5b0209d6f86935f26477238c1a50aceee8c1b1a43e73404ce0df7ecb947339",
-      "instruments": ["510300.SH", "510050.SH", "510500.SH", "512100.SH"],
-      "record_from": "2020-01-01",
-      "record_to": "2026-10-08",
-      "withholding_rate": "0"
-    }
-  }
-}
-```
-
-只读DuckDB，以固定version读取并保留source、实际known_at；不联网、不重写历史可知时间。
-上述四ETF固定快照共有38笔事件，已只读检查其登记日在除息日前。
-快照资料用于事后账务，不通过策略上下文暴露未来事件清单。
-股票分红目前通过相同显式事件输入，尚无股票供应商分红自动适配器。
-当前适配器拒绝登记/除息同日资料，不会自行解释其权益时点。
+本分支核心只接受显式dividends事件，不支持旧供应商dividend_snapshot；提供该配置会明确报错。AKShare公共日线入口仍拒绝全部accounting配置。
 
 ## 显式账户日历
 
@@ -139,4 +114,3 @@
 验证记录：全套217个测试通过，编译通过，原demo仍为PnL52及4条警示。
 新增回归覆盖股票/ETF、登记日前卖出、除息后买入、卖出后派息、期末应收、净税额、
 空行情计息、跨年利率、负现金、保证金计息基数、重复事件、缺除息估值与全账户日终基准。
-带分红的套利回调合成结果已核对逐组PnL总和等于账户PnL。

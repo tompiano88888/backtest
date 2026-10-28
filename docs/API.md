@@ -1,12 +1,14 @@
-> 2026-10-27 `backtest_akshare` 分支覆盖说明：当前公共入口仅支持 AKShare 股票、实际期货合约日线。原 iFinD／分钟／期权内容是继承的历史记录，不是本分支支持承诺。当前配置、接口、限制与运行方式以 README.md 和 backtest/akshare_daily.py 为准。
+# AKShare公共接口与核心契约
+
+公共CLI仅支持README列出的股票/实际期货日线。下方Bar/Frame/期权/竞价等为通用核心契约，不是AKShare适配器支持承诺。
+
+`backtest.akshare_daily.update(config, root)`发布完整不可变日线快照；`scenario(config, root, version)`只读获取固定快照并构造显式Frame；`run(config, root, version, on_bar=None, *, output=None, report_output=None, strategy=None)`回放并返回(engine, cfg)。完整运行使用output结果JSON路径，旧report_output只生成报告；两者不能同时传入。strategy提供名称及可序列化参数。
+
+股票/期货字段与时段要求见[README](../README.md)。run拒绝非AKShare快照、缺失日期、其他数据源历史费用及未实现的日历accounting配置。纯内存调用不产生文件。
 
 # 框架接口
 
-行情 `Bar` 可保留 `settlement_price`（当日结算价）和 `previous_settlement_price`（供应商前结算价），均使用 Decimal。前结算价不从相邻记录推算，也不替代当日结算基准；旧 Parquet 缺此前结算字段时读取为 None。
-
-股指期货全历史日期型落地使用 `backtest.ifind_futures_daily.publish_daily/publish_cache`，版本保存在独立 DuckDB 表 futures_daily_snapshots。它不属于 Store.bars 的带时间戳清单，历史时段 Provider 尚未装配；读取步骤见 [股指期货日线](INDEX_FUTURES.md)。
-
-合约资料使用 `backtest.ifind_contracts.publish_contracts/contract_from_snapshot`，版本表为 futures_contract_snapshots，固定关联的日线版本和 metadata revisions。资料有效时间按生命周期，可知时间按实际下载时刻；历史公告和时段未验证时不回填 known_at。详见 [股指期货元数据](INDEX_FUTURES_METADATA.md)。
+详细业务约定见[规格](../SPEC.md)，外部策略接入见[接入指引](RESEARCHER_GUIDE.md)。
 
 ## 回调与显式交易
 
@@ -101,21 +103,6 @@ with Store("data") as store:
 `put_metadata(kind,key,valid_from,known_at,payload,valid_to=None)` 是当前通用结构，payload 是 JSON 对象；业务 Schema 由后续标准化层校验。旧数据版本的 metadata 查询排除该版本发布之后录入的修订。
 `store.bars` 当前是分区读取的正确性实现；尚未优化为完整列裁剪／谓词下推查询器，不用于宣称性能目标。
 
-## iFinD 配置
+# 标准绩效输出
 
-`request` 指定 SDK 函数与参数；frequency 选择 THS_HQ（日线）或 THS_HF（分钟），另支持 THS_BD、THS_DS、THS_DP 和 THS_DateQuery。IFinDSource 是上下文管理器，管理登录／登出并解析官方 JSON 响应。
-CLI update 改用 `normalization`（代码、列、单位和分钟时间戳边界）及 `calendar_file`（带时区实际交易时段）生成标准 Bar，旧 column_mapping 任务需迁移。
-新增 ifind-check、ifind-query 和 update --validate-only；实际 SDK 返回字段和权限须通过小样本核验。配置、命令、错误行为及兼容性见 [iFinD 指南](IFIND.md)。
-接口参考：https://quantapi.51ifind.com/gwstatic/static/ds_web/quantapi-web/help-center/manual.html
-
-ETF 分红元数据：`backtest.ifind_etf_dividends.read_events(store, version, code, as_of=None)` 返回固定快照的 Decimal 每份现金及独立事件日期。as_of 为策略 PIT 过滤；未传用于事后账务资料。详见 [ETF 分红](ETF_DIVIDENDS.md)。
-
-## 2026-10-20 费用、竞价与执行观察接口
-
-ExecutionConfig新增fee_mode（默认fixed，可选historical）、fee_matching（默认fifo，可选today_first）、close_today_fee_rate、commission_rate及commission_per_unit。基础费用与佣金分别计算，平今减免不减免佣金；按实际成交价和数量计算。today_first跨group按同合约同方向先抵当日开仓量，不修改FIFO成本；仅先开后平。完整字段及研究输入示例见[手续费配置](EXECUTION_FEES.md)。
-
-runner.engine_from_config和run_scenario指令/回调共用execution、execution_by_instrument及historical_fees。合约execution完整替换全局，不逐字段继承。HistoricalFees(root,version,as_of)读取已关闭写连接的DuckDB标准fee_rule，按交易日匹配历史区间；缺失或冲突报错。publish_fee_snapshot可发布费用元数据快照，无需虚构行情Bar。下载和独立审计见[历史手续费](INDEX_FUTURES_FEES.md)，Git不携带实际数据库或原始缓存。
-
-runner.result新增fee_details与fee_provenance，逐笔费用拆分合计与Fill.fee、Ledger手续费现金流一致。slippage_ticks作用于连续Bar，离散Auction按结果价零滑点；竞价费用和成交约束照常执行，仅此前提交指令可参与。Frame.auctions与ctx.auctions提供标准竞价事件，竞价不计组合三次连续Bar重试时钟。
-
-ctx.fills_since(index=0)返回不可变成交元组。ctx.target_group(instrument,quantity,group)为独立单合约group设置持续目标，禁止操作组合group。Engine可选execution_guard允许按成交前只读开盘/竞价账户状态缩量或暂缓；ExecutionContext.fill_for_quantity提供无副作用的同源费用报价。execution_observer在open/after_fill/minute_close/settlement提供只读观察，默认关闭。详见[分钟层验收](MINUTE_ENGINE_ACCEPTANCE.md)。
+`run_scenario(config, on_bar=None, *, output=None)`传output时保存结果并默认生成标准报告；`save_result(engine, config, path)`可用于完成后的统一落盘。`backtest.performance.export_performance(daily_rows, initial, start, output, ...)`供外部完整研究调用，输出PNG/指标JSON/年度和逐日CSV。日终和交易日语义、缺样本/负权益处理及默认入口见[标准报告](STANDARD_PERFORMANCE.md)。

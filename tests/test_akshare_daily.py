@@ -125,6 +125,25 @@ def test_standard_report_preserves_snapshot_execution(tmp_path):
     assert (report / 'performance.png').read_bytes().startswith(b'\x89PNG')
 
 
+def test_complete_output_preserves_execution_and_exports_audit(tmp_path):
+    import json
+    from backtest.runner import result
+    cfg = config()
+    version = update(cfg, tmp_path/'store', stock_api())
+    original, original_cfg = run(cfg, tmp_path/'store', version)
+    output = tmp_path/'complete.json'
+    exported, exported_cfg = run(cfg, tmp_path/'store', version, output=output)
+    assert result(exported, exported_cfg) == result(original, original_cfg)
+    payload = json.loads(output.read_text(encoding='utf-8'))
+    assert D(payload['final']['pnl']) == D(100)
+    assert 'no_automatic_corporate_actions' in payload['assumptions']
+    assert 'residual' in payload
+    assert {p.name for p in (tmp_path/'complete/standard_report').iterdir()} == {
+        'performance.png', 'metrics.json', 'annual.csv', 'daily.csv'}
+    with pytest.raises(ValueError, match='Choose output'):
+        run(cfg, tmp_path/'store', version, output=output, report_output=tmp_path/'other')
+
+
 def test_replay_is_read_only_shareable_and_records_strategy(tmp_path):
     import subprocess
     import sys
