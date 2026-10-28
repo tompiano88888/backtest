@@ -1,5 +1,6 @@
 """Read-only standard performance reporting; never changes execution or accounting."""
 import csv
+from contextlib import contextmanager
 from datetime import date
 from decimal import Decimal as D
 import json
@@ -7,6 +8,36 @@ import math
 import os
 from pathlib import Path
 from statistics import mean, stdev
+import tempfile
+
+
+@contextmanager
+def _matplotlib_config_dir():
+    """Keep matplotlib's font cache out of the report directory.
+
+    A caller-provided MPLCONFIGDIR is respected. Otherwise one stable temp location is reused
+    (rebuilding the font cache costs seconds), with a throwaway directory as the fallback.
+    Matplotlib reads the variable on first import only, as before.
+    """
+    if os.environ.get('MPLCONFIGDIR'):
+        yield
+        return
+    scratch = None
+    cache = Path(tempfile.gettempdir()) / 'cn-backtest-matplotlib'
+    try:
+        cache.mkdir(parents=True, exist_ok=True)
+        if not os.access(cache, os.W_OK):
+            raise OSError('matplotlib cache directory is not writable')
+    except OSError:
+        scratch = tempfile.TemporaryDirectory(prefix='cn-backtest-mpl-', ignore_cleanup_errors=True)
+        cache = Path(scratch.name)
+    os.environ['MPLCONFIGDIR'] = str(cache)
+    try:
+        yield
+    finally:
+        os.environ.pop('MPLCONFIGDIR', None)
+        if scratch is not None:
+            scratch.cleanup()
 
 
 def statistics(rows, initial, start):
@@ -66,7 +97,9 @@ def statistics(rows, initial, start):
                            max_drawdown=str(r['max_drawdown']) if r['max_drawdown'] is not None else None,
                            partial_year=start>date(y,1,1) or end<date(y,12,31),
                            **risk(r['returns'],r['valid'])))
-    assert sum(D(r['pnl']) for r in annual) == prior-initial
+    # A real exception, not `assert`: the reconciliation must survive `python -O`.
+    if sum(D(r['pnl']) for r in annual) != prior-initial:
+        raise ValueError('Annual PnL does not reconcile with total PnL')
     if not valid: issues.append('nonpositive_equity: CAGR/Sharpe/volatility/Calmar undefined')
     if elapsed==0: issues.append('zero_elapsed_days: CAGR/Calmar undefined')
     if len(returns)<2: issues.append('insufficient_market_returns: Sharpe/volatility undefined')
@@ -91,18 +124,13 @@ def export_performance(rows, initial, start, output, *, title='回测表现', su
     metrics['minute_max_drawdown'] = str(minute_drawdown) if minute_drawdown is not None else None
     out = Path(output) / 'standard_report'
     out.mkdir(parents=True, exist_ok=True)
-    previous = os.environ.get('MPLCONFIGDIR')
-    os.environ['MPLCONFIGDIR'] = str(out.resolve() / '.matplotlib')
-    try:
+    with _matplotlib_config_dir():
         extra = f'分钟最大回撤 {float(minute_drawdown):.2%} · 主指标采用日终口径' if minute_drawdown is not None else ''
         if observation_basis != 'explicit_daily_equity':
             extra = '按交易日最后可见观察估值；非完整日终结算验收'
         if metrics['issues']:
             caveat = '注意：样本不足或权益非正时，不适用的风险指标显示“—”；PnL与实际亏损完整保留。'
         plot(metrics,title,subtitle,'#3d62a8',extra,caveat,out/'performance.png')
-    finally:
-        if previous is None: os.environ.pop('MPLCONFIGDIR',None)
-        else: os.environ['MPLCONFIGDIR'] = previous
     (out/'metrics.json').write_text(json.dumps(metrics,ensure_ascii=False,indent=2,allow_nan=False),encoding='utf-8')
     for name, records in [('annual.csv',metrics['annual']),('daily.csv',metrics['series'])]:
         with (out/name).open('w',encoding='utf-8-sig',newline='') as f:

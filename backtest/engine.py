@@ -100,6 +100,12 @@ class StrategyContext:
         self.marks = MappingProxyType(dict(engine.ledger.marks))
         self.account = engine.ledger.snapshot(engine.margin_rules)
         self.positions = tuple(MappingProxyType(dict(p.__dict__)) for p in engine.ledger.lots)
+        # Every warning the engine has raised since the previous callback is handed to the
+        # strategy exactly once, so research code can design its own response. Warnings
+        # raised after a callback within a frame (settlement, expiry) arrive at the next one.
+        start = min(engine._delivered, len(engine.warnings))
+        self.warnings = tuple(MappingProxyType(dict(w)) for w in engine.warnings[start:])
+        engine._delivered = len(engine.warnings)
 
     def submit(self, legs, combination=False):
         return self.__engine.submit(legs, self.time, combination)
@@ -122,7 +128,9 @@ class StrategyContext:
 
 class Engine:
     def __init__(self, ledger: Ledger, margin_rules: dict[str, MarginRule], config=None, execution_by_instrument=None, accounting_events=None,
-                 execution_guard=None, execution_observer=None, fee_provider=None):
+                 execution_guard=None, execution_observer=None, fee_provider=None, stale_quote_days=3):
+        if stale_quote_days is not None and (type(stale_quote_days) is not int or stale_quote_days < 1):
+            raise ValueError("stale_quote_days must be a positive integer or None")
         self.fees = FeeService(fee_provider)
         self.ledger = ledger
         self.margin_rules = margin_rules
@@ -138,6 +146,21 @@ class Engine:
         self.accounting_events = accounting_events
         self.execution_guard = execution_guard
         self.execution_observer = execution_observer
+        # Identity of the callback that produced the orders; set by run_scenario for provenance.
+        self.strategy: dict | None = None
+        # Diagnostics state: nothing here changes matching or accounting.
+        self.stale_quote_days = stale_quote_days
+        self._delivered = 0
+        self._reject_reason: str | None = None
+        self._op_reason: dict[int, str] = {}
+        self._unfilled_seen: dict[tuple, tuple] = {}
+        self._day_index = 0
+        self._last_day = None
+        self._quote_day: dict[str, date] = {}
+        self._quote_index: dict[str, int] = {}
+        self._stale_flagged: set[str] = set()
+        self._delivery_flagged: set[str] = set()
+        self._finalized = False
         if accounting_events:
             for event in accounting_events.dividends:
                 if ledger.instruments[event.instrument].asset not in (Asset.EQUITY, Asset.FUND):
@@ -220,28 +243,49 @@ class Engine:
     def _warn(self, op, code, **extra):
         self.warnings.append(dict(time=str(self.now), operation=op.id, code=code, **extra))
 
+    def _note(self, code, **extra):
+        """Engine-level diagnostic (not tied to one operation); also delivered to the callback."""
+        self.warnings.append(dict(time=str(self.now), code=code, **extra))
+
     def _match(self, leg, bar, available_volume):
+        # self._reject_reason explains a None result; it never influences the decision itself.
+        self._reject_reason = None
         inst = self.ledger.instruments[leg.instrument]
         auction = isinstance(bar, Auction)
         opening_price = bar.price if auction else bar.open
-        if bar.suspended or bar.volume == 0 or (inst.expiry and bar.trading_date > inst.expiry):
+        if bar.suspended:
+            self._reject_reason = "SUSPENDED"
+            return None
+        if bar.volume == 0:
+            self._reject_reason = "NO_VOLUME"
+            return None
+        if inst.expiry and bar.trading_date > inst.expiry:
+            self._reject_reason = "AFTER_EXPIRY"
             return None
         if leg.buy and bar.upper_limit is not None and opening_price >= bar.upper_limit:
+            self._reject_reason = "UPPER_LIMIT"
             return None
         if not leg.buy and bar.lower_limit is not None and opening_price <= bar.lower_limit:
+            self._reject_reason = "LOWER_LIMIT"
             return None
         cfg = self.execution_by_instrument.get(inst.id, self.config)
         qty = min(leg.quantity, available_volume)
+        closeable = None
         if leg.effect == "close":
-            qty = min(qty, self.ledger.available(leg, bar.trading_date))
+            closeable = self.ledger.available(leg, bar.trading_date)
+            qty = min(qty, closeable)
         else:
             qty = qty // inst.lot * inst.lot
         if not qty:
+            self._reject_reason = ("NO_CLOSEABLE_POSITION" if closeable == 0
+                                   else "NO_VOLUME_BUDGET" if available_volume <= 0 else "BELOW_LOT_SIZE")
             return None
         price = opening_price if auction else opening_price + (1 if leg.buy else -1) * cfg.slippage_ticks * inst.tick
         if not auction and (price < bar.low or price > bar.high):
+            self._reject_reason = "PRICE_OUTSIDE_BAR"
             return None
         if (bar.upper_limit is not None and price > bar.upper_limit) or (bar.lower_limit is not None and price < bar.lower_limit):
+            self._reject_reason = "PRICE_OUTSIDE_LIMITS"
             return None
         fee = self._fee_quote(leg, qty, price, bar.trading_date, cfg)['total']
         return Fill(bar.time if auction else bar.start, bar.trading_date, replace(leg, quantity=qty), price, fee)
@@ -293,6 +337,7 @@ class Engine:
             if frame.accounting_day_end is not None and frame.accounting_day_end != day:
                 raise ValueError("Accounting end date mismatch")
         self.now = frame.time
+        self._check_holdings(quotes, references)
         budgets = {i: int(b.volume * self.execution_by_instrument.get(i, self.config).participation) for i, b in quotes.items()}
         # Eligibility is decided before any fill; all closing legs precede all opening legs.
         pending = sorted([o for o in self.operations if o.state in ("pending", "unwinding")], key=lambda o: (not any(l.effect == "close" for l in o.legs), o.id))
@@ -324,7 +369,13 @@ class Engine:
         ordered_legs = sorted([(o, j, l) for o in eligible for j, l in enumerate(o.legs)], key=lambda item: (item[2].effect != "close", item[0].id, item[1]))
         for op, _, leg in ordered_legs:
             bar = quotes.get(leg.instrument)
-            fill = self._match(leg, bar, budgets.get(leg.instrument, 0)) if bar and leg.instrument in frame.open_instruments else None
+            reason = None
+            if bar and leg.instrument in frame.open_instruments:
+                fill = self._match(leg, bar, budgets.get(leg.instrument, 0))
+                reason = self._reject_reason
+            else:
+                fill = None
+                reason = "NO_QUOTE" if not bar else "NOT_OPEN"
             if fill and self.execution_guard:
                 maximum = fill.instruction.quantity
                 cfg=self.execution_by_instrument.get(leg.instrument,self.config)
@@ -346,6 +397,8 @@ class Engine:
                 if type(allowed) is not int or not 0<=allowed<=maximum or allowed%unit:
                     raise ValueError('Execution guard may only shrink or defer valid quantities')
                 fill = quote_quantity(allowed) if allowed else None
+                if not fill:
+                    reason = "GUARD_DEFERRED"
             if fill:
                 detail = self._fee_quote(fill.instruction, fill.instruction.quantity, fill.price,
                                          fill.trading_date, self.execution_by_instrument.get(leg.instrument, self.config))
@@ -357,9 +410,12 @@ class Engine:
                     self.execution_observer(self._execution_view(fill.time,fill.trading_date,'auction' if isinstance(bar,Auction) else 'continuous',
                                                                  opening_marks(fill.time)), 'after_fill')
                 if fill.instruction.quantity < leg.quantity:
-                    remaining_by_id[op.id].append(replace(leg, quantity=leg.quantity - fill.instruction.quantity))
+                    left = replace(leg, quantity=leg.quantity - fill.instruction.quantity)
+                    remaining_by_id[op.id].append(left)
+                    self._record_unfilled(op, left, "PARTIAL_FILL", leg.quantity, fill.instruction.quantity)
             else:
                 remaining_by_id[op.id].append(leg)
+                self._record_unfilled(op, leg, reason, leg.quantity, 0)
         for op in eligible:
             remaining = remaining_by_id[op.id]
             op.legs = remaining
@@ -413,6 +469,9 @@ class Engine:
                 self._warn(op, "DELIVERY_INTERRUPTED_OPERATION")
             elif not op.combination and op.state == "pending" and op.submitted < frame.time and any(l.instrument in frame.settle_instruments for l in op.legs):
                 op.state = "expired"
+                self._warn(op, "ORDER_EXPIRED", reason=self._op_reason.get(op.id, "NOT_ATTEMPTED"),
+                           legs=[dict(instrument=l.instrument, side=l.side, effect=l.effect, group=l.group, quantity=l.quantity)
+                                 for l in op.legs])
         for key in list(self.targets):
             if key[0] in delivered:
                 del self.targets[key]
@@ -443,6 +502,84 @@ class Engine:
         if (frame.accounting_day_end or frame.settle_instruments and not self.accounting_events) and on_day_end:
             on_day_end(StrategyContext(self, frame))
         return snapshot
+
+    def _record_unfilled(self, op, leg, reason, requested, filled):
+        """Explain a miss. Standalone orders warn when the reason or remaining size changes;
+        combinations keep their dedicated COMBINATION_* warnings."""
+        self._op_reason[op.id] = reason
+        if op.combination:
+            return
+        key = (op.id, leg.instrument, leg.side, leg.effect, leg.group)
+        state = (reason, leg.quantity)
+        if self._unfilled_seen.get(key) == state:
+            return
+        self._unfilled_seen[key] = state
+        self._warn(op, "ORDER_UNFILLED", instrument=leg.instrument, side=leg.side, effect=leg.effect, group=leg.group,
+                   requested=requested, filled=filled, remaining=leg.quantity, reason=reason, attempt=op.attempts)
+
+    def _check_holdings(self, quotes, references):
+        """Flag positions the engine can no longer mark or settle. Warnings only: the ledger,
+        marks and settlements are untouched, and strategies receive them through ctx.warnings."""
+        days = [q.trading_date for q in quotes.values()]
+        day = max(days) if days else self._last_day
+        if day is None:
+            return
+        if days and (self._last_day is None or day > self._last_day):
+            self._day_index += 1
+            self._last_day = day
+        for instrument in (*quotes, *references):
+            self._quote_day[instrument] = day
+            self._quote_index[instrument] = self._day_index
+            self._stale_flagged.discard(instrument)
+        if not days:
+            return
+        for instrument in sorted({p.instrument for p in self.ledger.lots}):
+            inst = self.ledger.instruments[instrument]
+            if inst.delivery and day > inst.delivery and instrument not in self._delivery_flagged:
+                self._delivery_flagged.add(instrument)
+                self._note("POSITION_PAST_DELIVERY", instrument=instrument, delivery=str(inst.delivery), trading_day=str(day),
+                           quantity=sum(p.quantity for p in self.ledger.lots if p.instrument == instrument))
+            if (self.stale_quote_days and instrument not in quotes and instrument not in references
+                    and instrument not in self._stale_flagged and instrument in self._quote_index):
+                gap = self._day_index - self._quote_index[instrument]
+                if gap >= self.stale_quote_days:
+                    self._stale_flagged.add(instrument)
+                    self._note("STALE_QUOTE", instrument=instrument, last_quote_day=str(self._quote_day[instrument]),
+                               trading_days_without_quote=gap)
+
+    @staticmethod
+    def _leg_view(leg):
+        return dict(instrument=leg.instrument, side=leg.side, effect=leg.effect, group=leg.group, quantity=leg.quantity)
+
+    def residual(self):
+        """Read-only view of what is still open, pending or unsettled right now."""
+        held = {p.instrument for p in self.ledger.lots}
+        return dict(
+            open_positions=[dict(instrument=p.instrument, side=p.side, quantity=p.quantity, group=p.group,
+                                 trading_date=str(p.trading_date)) for p in self.ledger.lots],
+            pending_operations=[dict(id=o.id, state=o.state, submitted=str(o.submitted), combination=o.combination,
+                                     after_last_frame=self.now is not None and o.submitted >= self.now,
+                                     legs=[self._leg_view(l) for l in o.legs])
+                                for o in self.operations if o.state in ("pending", "unwinding")],
+            expired_operations=sum(1 for o in self.operations if o.state == "expired"),
+            past_delivery=sorted(held & self._delivery_flagged),
+            stale_quotes=sorted(held & self._stale_flagged))
+
+    def finalize(self):
+        """End-of-run diagnostics, once. Orders submitted by the last callback could never be
+        attempted and are reported in residual() only; earlier pending orders also warn."""
+        if not self._finalized:
+            self._finalized = True
+            if self.now is not None:
+                for op in self.operations:
+                    if op.state in ("pending", "unwinding") and op.submitted < self.now:
+                        self._warn(op, "PENDING_OPERATION_AT_END", legs=[self._leg_view(l) for l in op.legs])
+            held = {p.instrument for p in self.ledger.lots}
+            for instrument in sorted(held & self._delivery_flagged):
+                self._note("POSITION_PAST_DELIVERY_AT_END", instrument=instrument)
+            for instrument in sorted(held & self._stale_flagged):
+                self._note("STALE_QUOTE_AT_END", instrument=instrument)
+        return self.residual()
 
     def roll(self, group, mapping: dict[str, str], at: datetime, enabled=False):
         if not enabled:

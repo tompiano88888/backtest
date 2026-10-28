@@ -1,5 +1,7 @@
 # 实现进度
 
+2026-10-28引擎诊断与可追溯性：所有引擎警告经ctx.warnings一次性交付回调；新增ORDER_UNFILLED/ORDER_EXPIRED/POSITION_PAST_DELIVERY/STALE_QUOTE及期末残留（finalize、residual、result()["residual"]），均带原因码，不改变撮合、过期规则或账务结果。provenance.strategy记录回调名称、参数与源码哈希；Store(read_only=True)支持并发只读回放；标准报告的matplotlib缓存不再写入输出目录；年度对账由assert改为ValueError。新增tests/test_framework_diagnostics.py 14项，全量428项通过（改动前414项）。限制：交割日无行情时引擎仍不自动生成结算事件，只警告；STALE_QUOTE按交易日计数且每段缺失只提示一次；回调之后产生的警告在下一次回调交付，最后一次回调之后的只进结果。接口见docs/API.md。
+
 2026-10-27标准报表提升为基础能力：backtest.performance提供只读统一指标/图片/年度及逐日明细；通用CLI与完整研究入口默认调用，外部循环通过export_performance接入。图表动态日期/本金/年份，红涨绿跌黑中性、蓝PnL线；单日/零波动/权益非正不伪造指标。matplotlib列入基础依赖。用户本次明确授权提交main，原研究节点、快照和封存不改变。接口与边界见docs/STANDARD_PERFORMANCE.md。
 
 2026-10-27后续完整复现：两组研究节点全历史重跑完成，套利PnL3602477.184315470元、21份CSV一致；R-BreakerPnL19898846.32130元、8份核心CSV匹配封存SHA，5701成交/1637交易日/798009资金观察独立核验通过。新增scripts.report_checkpoint_cards统一PnL、日终回撤、年度收益及风险指标图片，2项报表边界测试通过。统一CAGR采用日期差/365.25，套利与旧365/含首尾天数口径有微小展示差异，详见outputs/checkpoint_performance_20261027/report.md。策略、核心、快照和封存不改。
