@@ -41,7 +41,7 @@ def on_bar(ctx):
 engine, scenario = run(config, "data/akshare", version, on_bar=on_bar)
 ```
 
-完整日线在收盘后可见，回调指令最早下一允许日线开盘成交，末日决策不会回填到当日开盘。日线成交量参与率是简化假设，无法还原盘中路径或排队。
+完整日线在收盘后可见，回调指令最早下一允许日线开盘成交，末日决策不会回填到当日开盘。引擎的全部警告（未成交及原因、指令到期、持仓过交割日未结算、行情陈旧等）经`ctx.warnings`交给回调，每条只交付一次，策略可据此调整或抛异常终止；回调可设置`strategy_params`（或`run(..., strategy=dict(name=..., params=...))`）写入结果的`provenance.strategy`，回放只读打开快照，多个进程可并行回放同一版本。代码和字段见[docs/API.md](docs/API.md)。日线成交量参与率是简化假设，无法还原盘中路径或排队。
 
 ## 当前边界
 

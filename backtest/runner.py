@@ -4,6 +4,7 @@ from dataclasses import asdict
 from datetime import date, datetime
 import hashlib
 import importlib.metadata
+import inspect
 import json
 from pathlib import Path
 import platform
@@ -58,12 +59,39 @@ def engine_from_config(config):
     return Engine(Ledger(instruments, config["initial_cash"]), rules, execution_from_record(config.get("execution", {})),
                   {i: execution_from_record(row) for i, row in config.get("execution_by_instrument", {}).items()},
                   accounting_from_config(config["accounting"]) if "accounting" in config else None,
-                  fee_provider=fee_provider)
+                  fee_provider=fee_provider, stale_quote_days=config.get("stale_quote_days", 3))
 
 
-def run_scenario(config, on_bar=None):
+def strategy_identity(callback, name=None, params=None):
+    """Who produced the orders: name, JSON parameters and source hash of the callback.
+
+    A closure's source does not contain its parameters, so a callback should expose them as
+    ``strategy_params`` (and optionally ``strategy_name``), or pass ``strategy=dict(...)`` to
+    run_scenario. Without a callback and without an explicit identity there is nothing to record.
+    """
+    if callback is None and not (name or params):
+        return None
+    source = None
+    target = getattr(callback, "__func__", callback)
+    if callback is not None:
+        if not (inspect.isfunction(target) or inspect.ismethod(target)):
+            target = type(callback)
+        try:
+            source = inspect.getsource(target)
+        except (OSError, TypeError):
+            source = None
+    raw = params if params is not None else getattr(callback, "strategy_params", None)
+    return dict(name=name or getattr(callback, "strategy_name", None) or getattr(target, "__qualname__", None),
+                module=getattr(target, "__module__", None),
+                params=json.loads(json.dumps(raw or {}, sort_keys=True, default=json_default)),
+                source_sha256=hashlib.sha256(source.encode()).hexdigest() if source else None)
+
+
+def run_scenario(config, on_bar=None, *, strategy=None):
     """Explicit frame replay for reproducible tests and normalized research inputs."""
     engine = engine_from_config(config)
+    # Resolved before any frame runs so unserializable parameters fail immediately.
+    engine.strategy = strategy_identity(on_bar, **(strategy or {}))
     inputs = sorted(config.get("instructions", []), key=lambda x: datetime.fromisoformat(x["at"]))
     index = 0
     for row in config["frames"]:
@@ -92,6 +120,7 @@ def run_scenario(config, on_bar=None):
         engine.warnings.append(dict(code="ACCOUNTING_DAY_NOT_CLOSED", day=str(engine.accounting_events.current_day)))
     if index < len(inputs):
         engine.warnings.append(dict(code="INPUT_AFTER_BACKTEST_END", count=len(inputs) - index))
+    engine.finalize()
     return engine
 
 
@@ -112,7 +141,8 @@ def result(engine, config):
         provenance=dict(config_sha256=hashlib.sha256(json.dumps(config, sort_keys=True, default=json_default).encode()).hexdigest(),
                         code_sha256=code.hexdigest(), python=platform.python_version(),
                         dependencies={name: importlib.metadata.version(name) for name in ("duckdb", "pyarrow", "tzdata", "pytz")},
-                        data_version=config.get("data_version", "inline-scenario")),
+                        data_version=config.get("data_version", "inline-scenario"),
+                        strategy=getattr(engine, "strategy", None)),
         assumptions=["unified_cash_pool", "no_funding_admission_gate", "cash_delivery", "no_forced_liquidation", "bar_liquidity_approximation"] +
                     (["explicit_calendar_accounting_clock", "dividend_net_receivable_on_ex_date_cash_on_payment_day_start",
                       "configured_dividend_tax_assumption_not_automatic_stock_tax_law",
@@ -131,4 +161,5 @@ def result(engine, config):
                     dividend_cash_paid=sum((D(r["amount"]) for r in engine.ledger.entries if r["kind"] == "cash_dividend"), D(0)),
                     idle_cash_income=sum((D(r["amount"]) for r in engine.ledger.entries if r["kind"] == "idle_cash_income"), D(0))),
         operations=[asdict(o) for o in engine.operations], groups=engine.groups, warnings=engine.warnings,
+        residual=engine.residual(),
     )

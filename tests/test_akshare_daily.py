@@ -123,3 +123,32 @@ def test_standard_report_preserves_snapshot_execution(tmp_path):
     report = tmp_path / 'reported' / 'standard_report'
     assert D(json.loads((report / 'metrics.json').read_text(encoding='utf-8'))['pnl']) == D(100)
     assert (report / 'performance.png').read_bytes().startswith(b'\x89PNG')
+
+
+def test_replay_is_read_only_shareable_and_records_strategy(tmp_path):
+    import subprocess
+    import sys
+    from backtest.runner import result
+    cfg = config()
+    version = update(cfg, tmp_path, stock_api())
+
+    def on_bar(ctx):
+        pass
+
+    on_bar.strategy_params = dict(window=5)
+    code = ("import sys,time;from backtest.storage import Store;"
+            "s=Store(sys.argv[1],read_only=True);print('open',flush=True);time.sleep(4)")
+    holder = subprocess.Popen([sys.executable, '-c', code, str(tmp_path)], stdout=subprocess.PIPE, text=True)
+    try:
+        assert holder.stdout.readline().strip() == 'open'  # another process already holds the snapshot
+        engine, replay_cfg = run(cfg, tmp_path, version, on_bar)
+    finally:
+        holder.communicate(timeout=30)
+    provenance = result(engine, replay_cfg)['provenance']
+    assert provenance['strategy']['params'] == dict(window=5)
+    explicit, explicit_cfg = run(cfg, tmp_path, version, strategy=dict(name='instruction-flow', params=dict(file='x')))
+    assert result(explicit, explicit_cfg)['provenance']['strategy']['name'] == 'instruction-flow'
+    # Replay never creates a store as a side effect.
+    with pytest.raises(FileNotFoundError):
+        run(cfg, tmp_path / 'absent', version)
+    assert not (tmp_path / 'absent').exists()

@@ -2,6 +2,8 @@
 
 # 框架实现进度
 
+2026-10-28引擎诊断与可追溯性：所有引擎警告经ctx.warnings一次性交付回调；新增ORDER_UNFILLED/ORDER_EXPIRED/POSITION_PAST_DELIVERY/STALE_QUOTE及期末残留（finalize、residual、result()["residual"]），均带原因码，不改变撮合、过期规则或账务结果。provenance.strategy记录回调名称、参数与源码哈希；Store(read_only=True)支持并发只读回放；标准报告的matplotlib缓存不再写入输出目录；年度对账由assert改为ValueError。新增tests/test_framework_diagnostics.py 14项及AKShare只读回放1项，全量213项通过（改动前198项）；沪金SMA真实快照回放的权益、全部成交与逐日权益序列与改动前逐位一致，两进程并发只读回放同一快照成功；原1 tick滑点配置重放时，au2302平仓未成交与过期、过交割日残留持仓均在回调中被明确提示。限制：交割日无行情时引擎仍不自动生成结算事件，只警告；STALE_QUOTE按交易日计数且每段缺失只提示一次；回调之后产生的警告在下一次回调交付，最后一次回调之后的只进结果。接口见docs/API.md。
+
 更新日期：2026-10-16。完整 V1 尚未验收，本发布不包含策略研究代码、参数、报告或结果。
 
 ## 已实现

@@ -23,11 +23,24 @@ def json_default(value):
 
 
 class Store:
-    """Single-writer metadata DB + immutable, hash-verified Parquet snapshots."""
+    """Single-writer metadata DB + immutable, hash-verified Parquet snapshots.
 
-    def __init__(self, root):
+    ``read_only=True`` opens the DuckDB file read-only so several replay processes (for
+    example a parameter grid) can read one snapshot concurrently. DuckDB refuses a
+    read-write open while any other process holds the file, so only ``update`` jobs
+    should open the store for writing.
+    """
+
+    def __init__(self, root, read_only=False):
         import duckdb
         self.root = Path(root)
+        self.read_only = bool(read_only)
+        if self.read_only:
+            path = self.root / "metadata.duckdb"
+            if not path.exists():
+                raise FileNotFoundError(f"No store at {self.root}")
+            self.db = duckdb.connect(str(path), read_only=True)
+            return
         self.root.mkdir(parents=True, exist_ok=True)
         self.db = duckdb.connect(str(self.root / "metadata.duckdb"))
         self.db.execute("""CREATE TABLE IF NOT EXISTS metadata (
@@ -40,6 +53,10 @@ class Store:
         self.db.execute("""CREATE TABLE IF NOT EXISTS update_runs (
             id VARCHAR, started_at TIMESTAMPTZ, status VARCHAR, detail VARCHAR)""")
 
+    def _require_writable(self):
+        if self.read_only:
+            raise PermissionError("Store was opened read-only")
+
     def close(self):
         self.db.close()
 
@@ -50,6 +67,7 @@ class Store:
         self.close()
 
     def put_metadata(self, kind, key, valid_from, known_at, payload, valid_to=None):
+        self._require_writable()
         if valid_from.tzinfo is None or known_at.tzinfo is None or valid_to is not None and (valid_to.tzinfo is None or valid_to <= valid_from):
             raise ValueError("Metadata requires aware, valid temporal bounds")
         content = json.dumps([kind, key, valid_from, valid_to, known_at, payload], default=json_default, sort_keys=True)
@@ -85,6 +103,7 @@ class Store:
         return json.loads(row[0])
 
     def publish(self, bars: list[Bar], source: str, frequency="1m", parent=None):
+        self._require_writable()
         import pyarrow as pa
         import pyarrow.parquet as pq
         if frequency not in ("1m", "1d") or not bars:

@@ -133,7 +133,8 @@ def update(config, root, api=None):
 
 def scenario(config, root, version):
     instruments, sessions = validate(config)
-    with Store(root) as store:
+    # Replay only reads: a read-only open lets several replay processes share one snapshot.
+    with Store(root, read_only=True) as store:
         source = store.db.execute('SELECT source FROM datasets WHERE version=?', [version]).fetchone()
         if not source or source[0] != 'akshare':
             raise ValueError('Replay requires an explicit AKShare snapshot')
@@ -160,9 +161,10 @@ def scenario(config, root, version):
     return json.loads(json.dumps(cfg, default=json_default))
 
 
-def run(config, root, version, on_bar=None, *, report_output=None):
+def run(config, root, version, on_bar=None, *, report_output=None, strategy=None):
     cfg = scenario(config, root, version)
-    engine = run_scenario(cfg, on_bar)
+    # strategy=dict(name=..., params=...) or callback.strategy_params land in provenance.strategy.
+    engine = run_scenario(cfg, on_bar, strategy=strategy)
     if report_output is not None:
         from .runner import result
         from .performance import export_scenario_report
