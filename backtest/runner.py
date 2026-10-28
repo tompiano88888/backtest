@@ -129,6 +129,7 @@ def run_scenario(config, on_bar=None, *, output=None, strategy=None):
 def save_result(engine, config, path):
     """Finalize a complete scenario with its JSON and mandatory standard report."""
     from .performance import export_scenario_report
+    engine.finalize()
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = result(engine, config)

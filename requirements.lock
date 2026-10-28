@@ -9,7 +9,7 @@ pygments==2.21.0
 pytest==9.1.1
 pytz==2026.3.post1
 tzdata==2026.4
-# Optional research plotting dependencies verified 2026-10-09.
+# Standard report plotting dependencies.
 matplotlib==3.11.2
 contourpy==1.4.0
 cycler==0.12.1

@@ -1,40 +1,14 @@
-# 开发指南与当前研究节点
+# 回测框架开发约定
 
-2026-10-27用户新增要求：标准绩效图为框架基本功能，后续每次完整回测必须默认生成。收益上涨红、下跌绿、中性指标黑，PnL曲线蓝、回撤面积图保持原样；包含年度收益/回撤、夏普、卡尔玛等。完整运行须走runner.save_result/run_scenario(output=...)或在显式日终数据上调用backtest.performance.export_performance；不可只保存成交而漏报表。API和边界见docs/STANDARD_PERFORMANCE.md。本次用户明确授权将更新后的框架提交Git主分支，优先于下方此前“当前节点不创建Git提交”的历史约定；仍不改写封存、不提交数据或凭据。
+## 仓库范围（2026-10-28）
 
-2026-10-22整理：框架保持当前状态。不再使用的历史试验和临时产物已按用户要求永久删除；记录见docs/RESEARCH_MAINTENANCE.md。不得恢复旧方案为默认研究规则。
+本仓库只交付通用回测框架、数据适配、标准绩效输出、合成接口示例及框架测试。策略信号、因子、参数寻优、研究节点、研究结果和交易平台适配一律不提交。研究代码放仓库外独立项目，或Git忽略的research/、strategies/；参数放其所属研究目录。不得通过git add -f绕过边界。新增文件先检查是否属于通用能力，不按文件扩展名推断可提交。
 
-## 当前两组节点
+标准报表是回测层基本功能。CLI完整运行及run_scenario(output=...)、save_result统一输出结果JSON和standard_report；外部逐帧运行结束调用finalize并用export_performance输出。涨红跌绿中性黑、PnL蓝线、原回撤面积样式。详见docs/STANDARD_PERFORMANCE.md和docs/RESEARCHER_GUIDE.md。
 
-- 期现套利：docs/RESEARCH_CHECKPOINT.md；5—8月分红调整、35组滚动参数、IF/IH/IC/IM额外下限3.8%/2.3%/0.1%/3.6%；1000万元、不加NAV，PnL360.2477万元。必须显式指定--dividend-season-months 5,6,7,8。日频独立研究不等同统一分钟框架验收。
-- R-Breaker：docs/RBREAKER_CHECKPOINT.md、configs/rbreaker.current_checkpoint.json；历史手续费＋ATR20×1／当前权益1%风险定仓＋对锁，PnL19898846.32130元，夏普0.969945。所有平仓含解锁检查同合约同方向当日计费余额，非零改反向开仓；可普通计费反向锁仓优先释放，解锁与新开共用冻结目标和预算。净50%／真实大边总90%准入，执行期复核，无解锁豁免，不强平，超100%判资金可行性失败。不得暗中恢复直接平今、固定低费率、5%分批或滚动权重。
-- 保留当前结果、两个R-Breaker封存及核验依赖、套利参数来源／扫描／旧基准保护清单。不得覆盖数据快照和封存文件；新试验写独立目录。当前节点不创建Git提交或标签。
-- R-Breaker信号诊断与年度图：docs/RBREAKER_SIGNAL_DIAGNOSTICS.md、docs/RBREAKER_YEARLY_DIAGNOSTICS.md；只读当前成交，不重新撮合。2140笔含4笔未结束；胜率/R仅完整交易，PnL含期末估值，库存调整单列。年度归实际入场年，不等同账户年度PnL。不能以事后退出或持有分组当入场信息，不能从归因直接推导删信号收益。
-- 2026-10-26无限易模拟盘移植评估：docs/RBREAKER_INFINITRADER_ASSESSMENT.md。判断信号与对锁原则可复用，但须补行情时钟、异步目标订单、账户同步和持久恢复；尚未实现/部署或连接账户。分钟止损不默认改Tick止损，真实资金不沿用15%假设；无法对锁时保留退出意图，不擅自改直接平今。节点与框架不变。
+先读SPEC.md、IMPLEMENTATION.md、docs/API.md和README.md。规格目标与已实现能力分别陈述；不把当前限制改写为需求。用户后续明确要求优先。GitHub远程操作优先使用已连接插件，不擅自改用本机凭证推送。
 
-## 当前框架与数据边界
-
-2026-10-22两组节点经统一回测层重跑，报告outputs/node_backtests_20261022/report.md。R-Breaker8份核心CSV完全一致；新增backtest.arbitrage_node_engine外部回调／日频适配，套利PnL5543992.20452625元／夏普1.675238。保留节点信号参数，移除事后撤单和同收盘紧急成交，真实日OHLC经Engine执行；不自动更新原节点。ETF分钟未齐，不称分钟验收；T+1后预算缺口1505091.08650727元须单列，框架核心不改，370测试通过。方法docs/CASH_CARRY_CALLBACK.md。
-
-- 统一Engine/FeeService/Ledger；外部策略单一回调，不另建执行／现金账本。09:30为独立Auction，只有事前指令参与零滑点，结果后信号不得回填；普通Bar保持原时序与滑点。
-- 历史费版本bf211dd35fc143b6a7d62bf4a483aa98，as_of=2026-10-20T06:55:57.828971+00:00；537合约／42388合约日。today_first计费跨group，成交才消耗余额、交易日重置，不改变真实账务FIFO；缺失冲突禁止回退，佣金独立。尚未逐公告审定，known_at为取得时间。
-- 15%保证金仍为研究假设；分钟标签、32合约日供应商量额差异、历史规则/PIT、非Tick限制继续有效。统一Provider／独立日历调度／跨市场真实分钟验收未完成。
-- 指数ETF分钟下载仅109/664分段、518632条；供应商-4302周额度限制，data/index_etf_minute可断点续传，未发布完整快照。不得报告全部完成。
-- iFinD受限进程-340而沙箱外同凭据成功，不直接归咎凭据。凭据仅环境变量，禁止记录密码。完整数据现状见docs/LOCAL_IFIND_DATA.md，框架边界见docs/MINUTE_ENGINE_ACCEPTANCE.md。
-
-以下保留框架业务规则与开发约定；其中历史进展以以上现状和IMPLEMENTATION.md为准。
-
-## 1. 阅读顺序与文档职责
-
-开始任务时先读本文件，再按任务阅读：
-
-- `SPEC.md`：完整 V1 目标、业务规则和验收要求。
-- `IMPLEMENTATION.md`：实际实现程度、已知限制和后续工作。
-- `docs/API.md`：当前代码接口及使用约束。
-- `README.md`：环境、命令和示例。
-
-用户后续明确修改的决定优先于这些历史记录；更新时同步修订受影响的文档与测试。发现代码与已确认需求不一致，应修复实现，不要通过改写需求掩盖差异。若文档互相冲突且对话不能消除歧义，明确指出具体冲突再确认，不擅自改变关键业务语义。
-区分“用户已确认的业务规则”“工程默认方案”和“当前代码限制”；不要把当前限制固化为用户需求，也不要把规格中存在的能力说成代码已经实现。
+本地research/legacy_20261028若存在，是此次拆分前的本地保留副本，不属于框架交付、默认导入路径或测试范围。数据快照及封存不得覆盖。不要恢复其研究规则为框架默认值。
 
 ## 2. 项目目标与边界
 
@@ -156,72 +130,14 @@
 | 单独增加最终交割价字段 | 统一 settlement_price，结合交割日解释 |
 | 仿真真实实物交割、指派或强平 | 到期统一现金结算，不模拟上述事项 |
 
-## 11. 当前代码状态与下一步
 
-截至 2026-09-22：已经开始编码，版本 0.1.0，有统一账本、结算、基础撮合、组合超时、展期原语、版本化存储与 CLI 示例。历史验证记录为 **26 个测试通过**，示例现金 10052、PnL 52、四条组合警示、期末无持仓。这是历史基线，不代表今后修改后自动仍然通过。
+## 开发与验证
 
-**完整 V1 尚未验收。** 后续先读 IMPLEMENTATION.md，重点补齐：
+- Python 3.12+，Decimal金额，整数数量。修改撮合、结算、费用、组合状态机必须增加可手工对账回归案例。
+- 框架不得导入research/strategies或任何具体策略模块。合成示例只演示接口，不携带市场研究参数、训练结果或节点信息。
+- 新运行用独立输出目录。保留数据和本地修改，不提交凭据、SDK、生成数据、绩效图片或研究材料。
+- 运行 `.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider`、`-m compileall -q backtest`和`-m backtest demo --output outputs/<unique>/demo.json`。如临时目录权限受限，使用outputs下全新唯一的--basetemp目录。
+- 发布前在仅含待提交文件的独立目录执行测试和示例，检查导入不依赖本地研究文件；不把未运行的验证报告为通过。
+- 不自动扩大技术栈或实盘接入；不宣称尚未完成的跨市场/全资产/历史PIT验收已完成。
 
-1. iFinD SDK 与真实样本、字段、单位、夜盘日历、结算价和权限验证。
-2. 固定数据版本的仓库 → 历史行情 Provider → Frame 调度器，补齐缺行情时的预期时钟。
-3. 历史 Instrument、交易规则、费用及保证金参数自动加载，以及 PIT 主连映射驱动的自动展期。
-4. 登记日／除权日／派息日、应收股利、零碎股、红利税、ETF 期权合约调整等完整公司行为。
-5. 全市场日终协调，避免某个市场先结束就错误更新权重资金基准。
-6. 各资产真实数据人工对账、完整报告与性能基准，然后再做参数并行优化。
-
-当前列映射模板不等于真实数据接通，通用 PIT JSON 存储不等于所有业务元数据 Schema 完成，`Engine.roll` 原语不等于已自动订阅主连数据。不要夸大完成度。
-
-## 12. 开发与验证约定
-
-- 使用 Python 3.12+、Decimal 金额和整数交易数量；不要为性能优化悄悄引入账务浮点误差。
-- 修改撮合、结算或组合状态机时增加对应的可手工核对回归案例，优先检查盈亏不重复、组合隔离、现金权益一致及无未来信息。
-- 先保证单进程正确性与可复现性，再做性能／并行；没有真实规模测试不能承诺全市场速度。
-- 测试应覆盖实际风险，不用只重复实现逻辑的断言冒充业务验收。纯文档修改不需要重跑全套测试。
-- 用户希望在已授权范围内持续推进，不要反复确认已经确定的规则；遇到新的实质业务分歧时给出具体问题。
-- 保留数据和用户修改，不提交凭据或生成数据。更新实现后同步记录能力及剩余限制。
-- 不从此前的宏大架构建议自动引入 C++、Redis、消息总线或额外数据库；如需改变技术栈，应提供真实需求或测量依据。
-
-在项目根目录运行（Windows PowerShell）：
-
-```powershell
-.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider
-.venv\Scripts\python.exe -m backtest demo --output outputs\demo.json
-.venv\Scripts\python.exe -m compileall -q backtest
-```
-
-环境安装参考 README.md；依赖快照在 requirements.lock。当前环境通常没有全局 `python`，优先使用项目虚拟环境，不硬编码其他机器的个人目录。
-若执行受工具权限限制，按实际权限机制处理，不把环境权限失败说成代码测试失败，也不把未执行的检查报告为通过。
-
-## 13. 2026-10-08 iFinD 接口进展
-
-用户已选择本机 SDK 账号登录，凭据通过 IFIND_USERNAME / IFIND_PASSWORD 配置，不在聊天或任务 JSON 中传递。
-本机官方 SDK 已接入项目 .venv，并验证 DLL 可加载。新增接口位于 backtest/ifind.py 和 backtest/ifind_normalize.py；CLI 提供 ifind-check、ifind-query、update --validate-only，操作步骤见 docs/IFIND.md。
-当前分钟／日线更新使用显式交易时段 JSONL、代码及单位映射；禁止自然日推断夜盘归属，禁止前值填充或复权行情进入成交存储。基础资料和交易日历能查询导出，不等于已自动生成所有 PIT 元数据。
-这次测试使用模拟 SDK；真实登录、数据权限及样例时间／单位仍待本机凭据联调。后续先查最新 IMPLEMENTATION.md，不再误报“SDK 未安装”，也不能误报“真实行情已验收”。
-
-2026-10-09：用户确认登录成功。当前代理进程仍未检测到 IFIND_USERNAME / IFIND_PASSWORD，因此尚未执行真实行情查询；登录成功与行情权限、单位和结算数据验收分别记录。
-
-同日后续：用户执行真实分钟查询成功，本地 outputs/ifind-minute-raw.json 含 300033.SZ 于 2026-09-21 09:31–09:35 的五条记录。捕获响应经 update_ifind 回放至独立 outputs/ifind-sample-store，通过标准化、Parquet 读回相等、重复导入仍五条及旧快照不变检查。此为真实响应本地回放，不是代理重新联网查询；时间戳边界、其他资产与结算字段仍未验收。
-
-同日股指期货：用户提供官方 THS_HQ 命令，确认 settlement、preSettlement。537 个实际 IF/IC/IM/IH 合约共 42388 条历史日线已落地 data/index_futures，截止 2026-10-08；结算值、前结算值和 Decimal 精度保留，重复发布复用相同版本。日期型快照由 futures_daily_snapshots 管理，尚未拼接成 Engine Bar／Frame；不能猜历史开收盘时间。source_amount 和 volume 保留供应商口径，历史上市／交割元数据与独立交易所日历仍待核对，详见 docs/INDEX_FUTURES.md。
-
-同日元数据：用户提供 THS_BD 的 71 项指标及参数，全部 537 个合约资料已下载并写入 instrument 与 ifind_contract_observation，futures_contract_snapshots 固定关联日线版本及 revision 清单。上市／起始交易／最后交易／交割日期、乘数、tick、lot 均校验，已到期合约日线包含最终交易日。known_at 使用下载时间，不冒充历史公告时间。IF1005 等早期合约也返回当前 09:30–15:00 模板，因此 observed_sessions 不可直接生成历史时钟；当前费用和保证金仅保存原始观察，不能贯穿历史。详见 docs/INDEX_FUTURES_METADATA.md。
-
-同日指数／ETF：四个 underlying 指数 000300.SH、000905.SH、000852.SH、000016.SH 与用户指定的 510300.SH、510500.SH、512100.SH、510050.SH，共36560条日线观察已落地 data/index_etf，截止2026-10-08。指数只供参考、ETF为fund，不复权、不填充。指数成交量可能带小数；20条观察缺成交量／成交额（其中ETF18条），保留null并标ohlcv_complete=false，不进入撮合。最早回溯指数日期不能视为发布日期；ETF首条完整行情也不能冒充上市元数据。独立index_etf_daily_snapshots管理版本，详见docs/INDEX_ETF_DAILY.md。
-
-2026-10-12 ETF分红：用户清单1349只的全历史回溯已保存data/etf_dividends/metadata.duckdb，102只共587笔，585笔已除息及2笔已公告待除息；1247只供应商无返回事件，不将null改为确认零分红。累计次数/每份金额核对、不可变版本与原始观察保留，known_at用查询时间。178项测试通过。尚未接入完整分红账务/份额调整，不把原ETF策略报告误称为已含分红。入口scripts.download_etf_dividends，详情docs/ETF_DIVIDENDS.md。
-
-2026-10-12 ETF净值：scripts.download_index_etf_daily默认在ETF THS_HQ请求追加已实测的netAssetValue，原指数请求保持。含净值快照6feaff33a4ac4320832a06e488b1794a截止2026-10-08，净值14486条日期观察/14473非空/13null；25条净值独有日期单独保留，原36560条行情不变、旧快照不覆盖。unit_nav_known_at用查询时刻，不能冒充历史公告时间或盘中IOPV。读取nav_from_snapshot固定版本并验SHA256；189测试通过。详见docs/INDEX_ETF_DAILY.md。
-
-## 14. 2026-10-16 统一框架分红及闲置收益
-
-用户要求统一框架加入分红与闲置资金收益配置，并预留股票分红接口。
-已增加AccountingEvents：股票/ETF共用登记日锁定实际批次、除息认净应收、派息转现金；
-卖出后保留债权，应收只增加权益、不计可用现金或闲置收益。分红归原组合，
-闲置收益归cash_management，总归因须与账户PnL相等。
-闲置收益默认关闭，可配置历史年率、现金或现金减保证金基数、预留金额和日计数；
-它是估计现金收益，不等于真实回购成交模拟，不改变资金准入规则。
-显式accounting_day_start/end负责连续自然日与全账户屏障，周末空Frame计息；
-不能猜历史时钟，不能用单市场收盘替代全账户日终。
-固定比例税额是显式研究假设；股票持有期税、补税、零碎股、期权调整尚未实现，
-已预留DividendTaxPolicy与AccountEventHandler接口。详细配置及剩余限制见docs/ACCOUNT_EVENTS.md。
+框架交付文件由framework_files.json显式登记；新增通用模块/测试/文档需审查后更新清单。运行`python -m scripts.check_framework_scope`检查未登记文件及误入Git的研究材料。清单不是自动判断代码语义的替代，更新时仍须人工审查。

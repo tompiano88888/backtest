@@ -7,11 +7,9 @@
 
 ```powershell
 .venv\Scripts\python.exe -m backtest run examples/account_events.synthetic.json --output outputs/account_events/result.json
-.venv\Scripts\python.exe -m scripts.run_cash_carry_callback --scenario examples/cash_carry_callback.accounting.synthetic.json --output outputs/cash_carry_callback_accounting/result.json
 ```
 
-两者均为合成案例，不是实盘历史或税法验证。第二个使用此前导出的真实参数批次，
-行情与分红仍是合成数据；套利价格PnL与净分红合计200元，加闲置资金收益0.30392841元。
+此案例为合成接口验证，不是实盘历史或税法验证。
 
 ## 配置
 
@@ -141,4 +139,3 @@
 验证记录：全套217个测试通过，编译通过，原demo仍为PnL52及4条警示。
 新增回归覆盖股票/ETF、登记日前卖出、除息后买入、卖出后派息、期末应收、净税额、
 空行情计息、跨年利率、负现金、保证金计息基数、重复事件、缺除息估值与全账户日终基准。
-带分红的套利回调合成结果已核对逐组PnL总和等于账户PnL。

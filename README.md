@@ -1,45 +1,38 @@
-# 中国多资产回测基础设施
+# 中国多资产回测框架
 
-当前版本0.1.0，具备统一撮合、账务、每日结算、组合状态与版本化数据存储；完整V1尚未验收。
+供研究员或AI编写外部策略使用的独立回测层：统一撮合、费用、资金池账务、结算、组合状态机与标准绩效报告。仓库不提供策略信号、寻参模型、研究节点或交易平台适配；完整V1尚未验收。
 
-## 两组当前研究
+## 安装与验证
 
-|研究|当前节点|净PnL|夏普|
-|---|---|---:|---:|
-|期现套利|5—8月分红调整＋滚动寻参＋额外开仓下限|360.2477万元|1.5373|
-|R-Breaker|历史手续费＋ATR20／1%风险＋避免平今费对锁|1989.8846万元|0.969945|
-
-- [套利规则、配置与复现](docs/RESEARCH_CHECKPOINT.md)。
-- [R-Breaker规则、封存与复现](docs/RBREAKER_CHECKPOINT.md)、[执行路由](docs/RBREAKER_FEE_AVOIDANCE.md)。
-- [信号归因](docs/RBREAKER_SIGNAL_DIAGNOSTICS.md)、[年度多维图](docs/RBREAKER_YEARLY_DIAGNOSTICS.md)。
-- [无限易R-Breaker模拟盘适配](docs/RBREAKER_INFINITRADER_SIMULATION.md)：独立执行层，原策略与柜台90%双重准入，不改变回测节点；实际柜台验收另列。
-- [程序依赖与永久清理记录](docs/RESEARCH_MAINTENANCE.md)。旧方案不作为默认入口。
-- [2026-10-22两组节点统一回测层重跑](outputs/node_backtests_20261022/report.md)：R-Breaker原样复现；套利按当前信号经Engine日频撮合，[执行方法与差异](docs/CASH_CARRY_CALLBACK.md)。
-
-## 框架与能力边界
-
-策略通过外部回调／指令接入统一Engine/FeeService/Ledger。支持部分成交、组合重试、FIFO账务、每日结算、显式账户事件、独立集合竞价、可选历史手续费和执行期复核。资金准入由研究层配置，不改变默认框架规则。
-
-当前真实分钟验证集中于股指期货；15%保证金为研究假设，分钟行情不提供Tick路径或盘口排队保证。历史规则／PIT、统一Provider、独立日历调度、跨市场和其他资产真实分钟验收仍待完成。期现套利仍为独立日频研究。
-
-- [完整需求](SPEC.md) · [实际实现与限制](IMPLEMENTATION.md) · [接口](docs/API.md)
-- [分钟验收](docs/MINUTE_ENGINE_ACCEPTANCE.md) · [历史费用](docs/EXECUTION_FEES.md) · [账户事件](docs/ACCOUNT_EVENTS.md)
-- [本地数据清单](docs/LOCAL_IFIND_DATA.md) · [iFinD接入](docs/IFIND.md) · [费用数据](docs/INDEX_FUTURES_FEES.md)
-
-## 环境和检查
-
-每次完整回测默认生成[标准绩效报告](docs/STANDARD_PERFORMANCE.md)：蓝色PnL线、回撤面积图、年度收益/回撤、夏普/卡尔玛等；收益红、亏损绿、中性指标黑。报告保存在结果目录的`standard_report/`，通用JSON结果则放在同名子目录下。
-
-2026-10-27备份迁移已恢复本机离线回测；统一入口、验证结果和SDK待办见[本机工作流恢复](docs/WORKFLOW_RESTORE.md)。
-
-Python 3.12+；优先使用项目虚拟环境。依赖见pyproject.toml及requirements.lock。
+Python 3.12+；在新工作目录创建本机环境，不复用另一台电脑的虚拟环境。
 
 ```powershell
-uv --cache-dir .uv-cache venv .venv
-uv --cache-dir .uv-cache pip install --python .venv\Scripts\python.exe -e ".[dev,research]"
+py -3.12 -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.lock
+.venv\Scripts\python.exe -m pip install --no-deps -e .
+.venv\Scripts\python.exe -m pip check
 .venv\Scripts\python.exe -m pytest -q -p no:cacheprovider
-.venv\Scripts\python.exe -m backtest demo --output outputs/demo.json
-.venv\Scripts\python.exe -m backtest run examples/account_events.synthetic.json --output outputs/account_events/result.json
+.venv\Scripts\python.exe -m backtest demo --output outputs/demo/result.json
+.venv\Scripts\python.exe examples/external_callback.py --output outputs/callback/result.json
 ```
 
-iFinD凭据仅使用IFIND_USERNAME／IFIND_PASSWORD环境变量。真实数据已落地；具体覆盖、未完成下载与质量限制以数据文档为准。不可变快照不得原地覆盖，未完成任务不得发布为完整版本。
+demo和外部回调示例使用合成数据，不需要供应商账号或本地研究文件。真实数据、历史规则和时钟需调用方显式准备。
+
+## 接入与输出
+
+外部策略传入`on_bar`回调或不含成交价格的指令。`run_scenario(config, on_bar=callback, output=...)`统一保存结果及标准图表；不传output只适用于内存组合/测试。策略不得直接修改Ledger。回调身份与参数写入provenance，未成交原因与期末残留写入结果。
+
+完整输出为结果JSON及同名目录中的`standard_report/performance.png`、`metrics.json`、`annual.csv`、`daily.csv`。涨红跌绿、中性黑、蓝色PnL线、原回撤面积图；包含年度收益/回撤、夏普、卡尔玛等。
+
+- [研究员与AI接入指引](docs/RESEARCHER_GUIDE.md)
+- [接口](docs/API.md) · [标准报告](docs/STANDARD_PERFORMANCE.md)
+- [需求规格](SPEC.md) · [实现状态与限制](IMPLEMENTATION.md)
+- [账户事件](docs/ACCOUNT_EVENTS.md) · [费用](docs/EXECUTION_FEES.md) · [数据接口](docs/IFIND.md)
+
+## 协作边界
+
+Git只管理框架。研究放独立仓库或被忽略的research/strategies目录；数据与输出被忽略。多电脑各用独立仓库和虚拟环境；OneDrive仅交接已关闭数据库、已完成的快照与结果，不同时写共享Git目录或DuckDB。并发只读须显式使用Store(read_only=True)，它不提供跨电脑分布式锁。
+
+2026-10-28起main当前树剥离研究材料；此前提交仍在Git历史中。仅需要干净当前框架可浅克隆main。Git历史清除和其他分支处理不属于这次主线目录整理。
+
+框架交付文件由framework_files.json显式登记；新增通用模块/测试/文档需审查后更新清单。运行`python -m scripts.check_framework_scope`检查未登记文件及误入Git的研究材料。清单不是自动判断代码语义的替代，更新时仍须人工审查。

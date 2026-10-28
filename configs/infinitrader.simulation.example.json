@@ -1,9 +1,0 @@
-{
-  "environment": "simulation",
-  "mode": "observe",
-  "investor": "",
-  "counter_risk_cap": "0.90",
-  "rules_mode": "checkpoint_estimates",
-  "rules_file": "checkpoint_estimates.json",
-  "state_directory": "state"
-}

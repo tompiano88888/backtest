@@ -1,4 +1,4 @@
-"""Acquire the eight arbitrage indices/ETFs using pinned daily coverage."""
+"""Acquire index/ETF observations using pinned daily coverage."""
 from scripts.download_index_futures_minute import main
 
 

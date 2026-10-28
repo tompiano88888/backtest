@@ -1,8 +1,9 @@
 # 股指期货历史日线
 
+本文所列历史下载规模、版本与本机验证仅为适配器开发记录；数据、SDK、凭据和运行输出不随Git交付。新使用者必须准备自己的输入和固定版本，不能假定这些路径已存在。
+
 ## 当月／下月跨期价差研究
 
-离线入口：`.venv\Scripts\python.exe -m scripts.analyze_index_futures_spread`。
 默认读取最新快照并立即固定版本；用 `--version VERSION` 重现指定版本。
 默认读取关联行情版本的 futures_contract_snapshots，固定 revision 清单；
 用 `--metadata-version VERSION` 固定元数据版本。537 个合约资料已下载，详见

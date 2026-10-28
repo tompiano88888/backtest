@@ -1,5 +1,7 @@
 # iFinD股指期货历史手续费
 
+本文所列历史下载规模、版本与本机验证仅为适配器开发记录；数据、SDK、凭据和运行输出不随Git交付。新使用者必须准备自己的输入和固定版本，不能假定这些路径已存在。
+
 2026-10-20已完成本仓库固定日线版本内全部537个IF/IH/IC/IM实际月份合约的手续费日期序列导入，覆盖2010-04-16至2026-10-08各合约已有行情日期，共42388条合约日记录（IF16000、IH11156、IC11156、IM4076）。范围没有自动延长到本次下载日，也不包含主连代码、股指期权或仓库范围外的新合约。
 
 费用库：`data/execution_fees/metadata.duckdb`。固定费用版本：`bf211dd35fc143b6a7d62bf4a483aa98`；知识截止：`2026-10-20T06:55:57.828971+00:00`。关联日线版本：`0fff65706ce54991a3725f1bcbb6c6c9`。
@@ -42,8 +44,8 @@
 
 若修订查询日期/字段或重新取得供应商版本，请使用新的--cache目录，不覆盖本批原始观察。连接本机SDK时，受限进程登录返回-340，沙箱外以相同环境凭据登录和下载成功；此次未遇到周额度限制。不在日志或源码保存凭据。
 
-研究配置片段为`configs/ifind.index-futures-fees.json`，将execution及historical_fees合并到完整run_scenario配置，指令或回调均可；其中1tick为示例，可按研究设置修改。每合约完整execution配置必须同样显式启用historical，否则该合约会保留其自身fixed模式。金额佣金和按手佣金默认为零。接口详见[统一手续费](EXECUTION_FEES.md)。
+按[统一手续费配置示例](EXECUTION_FEES.md)创建自己的本地配置，将execution及historical_fees合并到完整run_scenario配置，指令或回调均可；其中1tick为示例，可按研究设置修改。每合约完整execution配置必须同样显式启用historical，否则该合约会保留其自身fixed模式。金额佣金和按手佣金默认为零。接口详见[统一手续费](EXECUTION_FEES.md)。
 
 原始小样本及复查：`outputs/ifind_futures_fees_import/probe.json`、`probe_ds.json`、`recheck.json`。全量报告：`validation.json`、`independent_verification.json`及`cross_contract_differences.csv`。
 
-验证结果：9项新增适配测试，全套354项通过；compileall、demo与实际费用配置读取通过，离线重复发布版本一致，原72份R-Breaker封存SHA256一致。验证摘要见outputs/ifind_futures_fees_import/checks.json。
+验证结果：9项新增适配测试，全套354项通过；compileall、demo与实际费用配置读取通过，离线重复发布版本一致。验证摘要见outputs/ifind_futures_fees_import/checks.json。
