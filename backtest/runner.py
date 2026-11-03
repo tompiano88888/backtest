@@ -59,7 +59,8 @@ def engine_from_config(config):
     return Engine(Ledger(instruments, config["initial_cash"]), rules, execution_from_record(config.get("execution", {})),
                   {i: execution_from_record(row) for i, row in config.get("execution_by_instrument", {}).items()},
                   accounting_from_config(config["accounting"]) if "accounting" in config else None,
-                  fee_provider=fee_provider, stale_quote_days=config.get("stale_quote_days", 3))
+                  fee_provider=fee_provider, stale_quote_days=config.get("stale_quote_days", 3),
+                  combination_max_attempts=config.get('combination_max_attempts',3))
 
 
 def strategy_identity(callback, name=None, params=None):
@@ -165,6 +166,8 @@ def result(engine, config):
         snapshots=engine.snapshots, positions=[asdict(p) for p in engine.ledger.lots],
         fills=[asdict(f) for f in engine.ledger.fills], cash_entries=engine.ledger.entries,
         fee_details=engine.fees.details,
+        execution_details=engine.execution_details, execution_attempts=engine.execution_attempts,
+        lock_releases=engine.lock_releases,
         fee_provenance=(dict(version=engine.fees.provider.version, as_of=engine.fees.provider.as_of)
                         if engine.fees.provider is not None else None),
         noncash_entries=engine.ledger.noncash_entries,

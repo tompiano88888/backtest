@@ -17,7 +17,7 @@ def security_config(asset="fund"):
         bars = [] if day.weekday() >= 5 else [dict(instrument="S", start=f"{day}T09:30:00+08:00", end=f"{day}T15:00:00+08:00", trading_date=str(day), open="10" if day == days[0] else "9", close="10" if day == days[0] else "9", high="10", low="9", volume=10000)]
         frames.append(dict(time=f"{day}T15:00:00+08:00", bars=bars, open_instruments=["S"] if bars else [], accounting_day_start=str(day), accounting_day_end=str(day)))
     dividend = dict(event_id="S-div-1", instrument="S", record_date=str(days[0]), ex_date=str(days[3]), payment_date=str(days[4]), cash_per_unit="1", withholding_rate=".1")
-    return dict(initial_cash="10000", instruments=[dict(id="S", asset=asset, account="security", exchange="TEST", product="S", lot=100, sell_delay_days=1)], execution=dict(participation="1"), accounting=dict(dividends=[dividend]), frames=frames,
+    return dict(initial_cash="10000", instruments=[dict(id="S", asset=asset, account="security", exchange="TEST", product="S", lot=100, sell_delay_days=1)], execution=dict(participation="1", slippage_ticks=0), accounting=dict(dividends=[dividend]), frames=frames,
                 instructions=[dict(at=f"{days[0]}T09:00:00+08:00", legs=[dict(instrument="S", side=1, quantity=100, group="a")]),
                               dict(at=f"{days[3]}T09:00:00+08:00", legs=[dict(instrument="S", side=1, quantity=100, effect="close", group="a"), dict(instrument="S", side=1, quantity=100, group="b")])])
 

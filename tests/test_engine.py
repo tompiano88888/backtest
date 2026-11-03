@@ -20,7 +20,7 @@ def frame(n, missing=(), volumes=None, open_ids=None):
 
 def engine():
     inst = {i: future(i) for i in ("A", "B", "C")}
-    return Engine(Ledger(inst, 1), {i: MarginRule("future", D("0.1")) for i in inst}, ExecutionConfig(participation=D(1)))
+    return Engine(Ledger(inst, 1), {i: MarginRule("future", D("0.1")) for i in inst}, ExecutionConfig(participation=D(1), slippage_ticks=0))
 
 
 def test_partial_combination_three_bars_then_unwind_fourth():
@@ -97,7 +97,7 @@ def test_option_weight_not_accepted():
 def test_roll_explicit_switch_and_later_expiry():
     a = future("A", date(2026, 9, 23))
     b = future("B", date(2026, 10, 23))
-    e = Engine(Ledger({"A": a, "B": b}, 10000), {i: MarginRule("future", D("0.1")) for i in ("A", "B")}, ExecutionConfig(participation=D(1)))
+    e = Engine(Ledger({"A": a, "B": b}, 10000), {i: MarginRule("future", D("0.1")) for i in ("A", "B")}, ExecutionConfig(participation=D(1), slippage_ticks=0))
     trade(e.ledger, "A", 1, 2, 100, group="holding")
     assert e.roll("holding", {"P": "B"}, T) is None
     op = e.roll("holding", {"P": "B"}, T, enabled=True)

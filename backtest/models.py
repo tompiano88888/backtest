@@ -114,10 +114,17 @@ class Instruction:
     quantity: int
     effect: str = "open"
     group: str = "standalone"
+    limit_price: Decimal | None = None  # order quotation, never a supplied fill price
+    price_model: str | None = None  # explicit close-only execution policy
 
     def __post_init__(self):
         if self.side not in (-1, 1) or type(self.quantity) is not int or self.quantity <= 0 or self.effect not in ("open", "close"):
             raise ValueError("Invalid instruction")
+        if self.limit_price is not None:
+            object.__setattr__(self, 'limit_price', D(self.limit_price))
+        if self.price_model is not None:
+            if self.price_model != 'locked_close_average' or self.effect != 'close' or self.limit_price is not None:
+                raise ValueError('locked_close_average requires a close without a limit quotation')
 
     @property
     def buy(self) -> bool:

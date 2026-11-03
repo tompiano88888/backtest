@@ -1,5 +1,12 @@
 # 框架接口
 
+通用双边自锁解除：`ctx.close_locked(instrument, long_group, short_group, quantity=None)`。
+`OpeningUnlockPolicy` 接收外部开仓信号及显式第一分钟时钟，无信号时最早第二分钟执行。
+均价加双边合计不利一跳、共享分钟额度、部分成交重试和归属约束见
+[自锁解除](SELF_LOCK_RELEASE.md)。框架不生成研究信号或默认自动清仓。
+
+显式竞价容量仿真：`Engine(..., auction_volume_exemption=predicate)`可按不可变指令选择竞价容量豁免，默认关闭；T+1、可平数量、限价、费用和账务仍生效，成交记录保留原始量与豁免标记。见[竞价容量仿真](AUCTION_CAPACITY_SIMULATION.md)。
+
 详细业务约定见[规格](../SPEC.md)，外部策略接入见[接入指引](RESEARCHER_GUIDE.md)。
 
 ## 回调与显式交易
@@ -20,6 +27,22 @@ engine.step(frame, on_bar=on_bar)
 ```
 
 `side` 始终表示持仓方向，`effect` 为 open 或 close：`side=-1,effect=close` 为买入平空。
+显式均价、冻结委托价与开盘择优、当前帧取消剩余订单的接口见
+[均价与委托价执行](AVERAGE_AND_LIMIT_EXECUTION.md)。
+可选前收盘触价、下一 Bar 开盘市价升级，以及持续完成组合的配置见
+[参考价执行](REFERENCE_EXECUTION.md)；默认撮合与三 Bar 超时规则保持。
+普通市价与积极报价统一定价：买入`min(Bar.open + 滑点tick, Bar.high)`，
+卖出`max(Bar.open - 滑点tick, Bar.low)`；`slippage_ticks`默认1，可显式配置。
+`Instruction(..., limit_price=...)`可选字段表达委托报价，不是成交价格。
+买价高于Bar.high、卖价低于Bar.low时按上述市价规则在Bar.start成交；
+报价在闭区间[low,high]内按报价触价成交并保守记在Bar.end；
+买价低于low、卖价高于high时不成交。参考价模式产生的报价也使用相同判断。
+后续市价补单也加不利滑点，不再裸开盘成交。集合竞价仍按独立竞价价格。
+`ExecutionConfig.participation`默认None（JSON为null或省略）：一分钟Bar为50%，
+日线及其他时长Bar为10%，集合竞价维持10%。一分钟由Bar.end-start恰为60秒判定，
+不根据回调频率推断；其他粒度可显式设置参与率。非空participation是跨粒度固定覆盖值。
+同标的同Bar所有订单共享向下取整后的数量预算，开仓还按交易单位取整。
+成交量预算、涨跌停和可平数量仍生效。显式报价无法触及时记LIMIT_PRICE_NOT_TOUCHED。
 回调可见 `time/bars/marks/account/positions/warnings`，提交方法为 `submit/target/target_weight`。
 研究代码是可信本地代码；只读上下文避免意外修改，不是恶意代码安全沙箱。
 
@@ -29,7 +52,7 @@ engine.step(frame, on_bar=on_bar)
 
 | 代码 | 产生时点 | 含义 |
 |---|---|---|
-| `ORDER_UNFILLED` | 撮合后、回调前 | 非组合指令本 Bar 未（完全）成交。`reason`：`SUSPENDED`、`NO_VOLUME`、`AFTER_EXPIRY`、`UPPER_LIMIT`、`LOWER_LIMIT`、`NO_CLOSEABLE_POSITION`、`NO_VOLUME_BUDGET`、`BELOW_LOT_SIZE`、`PRICE_OUTSIDE_BAR`（含滑点把价格推出区间）、`PRICE_OUTSIDE_LIMITS`、`NO_QUOTE`、`NOT_OPEN`、`GUARD_DEFERRED`、`PARTIAL_FILL`；同一指令的原因或剩余数量变化时才再次提示 |
+| `ORDER_UNFILLED` | 撮合后、回调前 | 非组合指令本 Bar 未（完全）成交。`reason`：`SUSPENDED`、`NO_VOLUME`、`AFTER_EXPIRY`、`UPPER_LIMIT`、`LOWER_LIMIT`、`NO_CLOSEABLE_POSITION`、`NO_VOLUME_BUDGET`、`BELOW_LOT_SIZE`、`PRICE_OUTSIDE_BAR`（保留的防御性检查；普通市价滑点已截取到Bar区间）、`PRICE_OUTSIDE_LIMITS`、`NO_QUOTE`、`NOT_OPEN`、`GUARD_DEFERRED`、`PARTIAL_FILL`、`NO_REFERENCE_CLOSE`、`REFERENCE_PRICE_NOT_TOUCHED`；同一指令的原因或剩余数量变化时才再次提示 |
 | `ORDER_EXPIRED` | 帧结束后 | 非组合指令按 `settle_instruments` 规则到期仍未成交；带最后一次 `reason` 和未成交腿 |
 | `POSITION_PAST_DELIVERY` | 帧开始 | 持仓合约已过交割日仍没有结算；引擎不自行结算，持仓保持末次估值 |
 | `STALE_QUOTE` | 帧开始 | 持仓标的连续 `stale_quote_days`（默认 3）个交易日没有行情或 `valuation_marks`；`config["stale_quote_days"]` 或 `Engine(stale_quote_days=...)` 配置，`None` 关闭；每段缺失只提示一次 |
@@ -60,6 +83,13 @@ engine.step(frame, on_bar=on_bar)
 日终回调是 `engine.step(frame, on_day_end=...)`；其中新指令不会在刚结束的 Bar 成交。
 启用accounting时仅在`accounting_day_end`全账户屏障调用；未启用时保持旧结算Frame回调行为。
 
+组合任一原始腿发生交割时，仍以组合形式执行的未完成操作变为`expired`并产生
+`DELIVERY_INTERRUPTED_OPERATION`；该腿已经全部成交、因而不在剩余`legs`中时也适用。
+已成交记录、剩余数量和其他腿实际持仓保留；其他腿不自动平仓。外部研究可在日终回调
+看到中断及残余持仓，再显式提交退出，最早下一允许Bar成交。
+超时后已经转为非组合的`unwinding`清理只受其剩余腿的交割约束；历史原始腿交割不会
+中断仍可在自身时段完成的残余退出。剩余退出腿本身交割时仍按到期中断与现金结清处理。
+
 ## 账本
 
 统一分红和闲置收益配置见[账户事件](ACCOUNT_EVENTS.md)。`engine_from_config`读取可选
@@ -82,6 +112,10 @@ engine.step(frame, on_bar=on_bar)
 每个独立策略持仓应使用专有 group，不要用一个 group 混装彼此无关的头寸。正在执行该 group 的组合操作时禁止再提交展期。
 
 ## 持久化
+
+固定股指期货、ETF、指数分钟落地区可通过 `backtest.ifind_minute.MinuteSnapshot`
+只读加载，再用 `normalize_day` 和显式 SessionCalendar 生成分钟 Bar。
+边界观察、指数参考量、缺分钟预期时钟与版本核验见[分钟接入](MINUTE_FEED.md)。
 
 ```python
 from backtest.storage import Store

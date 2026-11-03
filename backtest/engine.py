@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from datetime import date, datetime
-from decimal import Decimal
+from datetime import date, datetime, timedelta
+from decimal import Decimal, ROUND_HALF_EVEN
 from typing import Callable
 from types import MappingProxyType
 from copy import copy
@@ -14,8 +14,9 @@ from .models import Asset, Auction, Bar, D, Fill, Instruction, MarginRule
 
 @dataclass(frozen=True)
 class ExecutionConfig:
-    participation: Decimal = Decimal("0.1")
-    slippage_ticks: int = 0
+    # None selects 50% for one-minute Bars, 10% for daily/other Bars and auctions.
+    participation: Decimal | None = None
+    slippage_ticks: int = 1
     fee_per_unit: Decimal = Decimal(0)
     fee_rate: Decimal = Decimal(0)
     close_today_fee_per_unit: Decimal | None = None
@@ -25,6 +26,7 @@ class ExecutionConfig:
     commission_per_unit: Decimal = Decimal(0)
     fee_matching: str = 'fifo'
     fee_mode: str = 'fixed'
+    price_model: str = 'next_open'
 
     def __post_init__(self):
         for name in ('participation', 'fee_per_unit', 'fee_rate', 'close_today_fee_per_unit',
@@ -35,10 +37,17 @@ class ExecutionConfig:
                 if value < 0:
                     raise ValueError('Invalid execution fee/participation')
                 object.__setattr__(self, name, value)
-        if not 0 < self.participation <= 1 or type(self.slippage_ticks) is not int or self.slippage_ticks < 0:
+        if (self.participation is not None and not 0 < self.participation <= 1) or type(self.slippage_ticks) is not int or self.slippage_ticks < 0:
             raise ValueError('Invalid execution settings')
         if self.fee_matching not in ('fifo', 'today_first') or self.fee_mode not in ('fixed', 'historical'):
             raise ValueError('Invalid fee mode/matching')
+        if self.price_model not in ('next_open', 'previous_close_then_open', 'bar_average', 'limit_open_then_market'):
+            raise ValueError('Invalid execution price model')
+
+    def participation_for(self, quote):
+        if self.participation is not None:
+            return self.participation
+        return D('.5') if isinstance(quote, Bar) and quote.end-quote.start == timedelta(minutes=1) else D('.1')
 
 
 @dataclass(frozen=True)
@@ -110,6 +119,9 @@ class StrategyContext:
     def submit(self, legs, combination=False):
         return self.__engine.submit(legs, self.time, combination)
 
+    def cancel(self, operation_id, reason='strategy_cancel'):
+        return self.__engine.cancel(operation_id, self.time, reason)
+
     def target(self, instrument, quantity):
         return self.__engine.target(instrument, quantity, self.time)
 
@@ -118,6 +130,9 @@ class StrategyContext:
 
     def target_weight(self, instrument, weight):
         return self.__engine.target_weight(instrument, weight, self.time)
+
+    def close_locked(self, instrument, long_group, short_group, quantity=None):
+        return self.__engine.close_locked(instrument, long_group, short_group, self.time, quantity)
 
     def fills_since(self, index=0):
         """Immutable executed fills for strategy lifecycle tracking, not order state."""
@@ -128,9 +143,21 @@ class StrategyContext:
 
 class Engine:
     def __init__(self, ledger: Ledger, margin_rules: dict[str, MarginRule], config=None, execution_by_instrument=None, accounting_events=None,
-                 execution_guard=None, execution_observer=None, fee_provider=None, stale_quote_days=3):
+                 execution_guard=None, execution_observer=None, fee_provider=None, stale_quote_days=3,
+                 combination_max_attempts=3, auction_volume_exemption=None):
         if stale_quote_days is not None and (type(stale_quote_days) is not int or stale_quote_days < 1):
             raise ValueError("stale_quote_days must be a positive integer or None")
+        if combination_max_attempts is not None and (type(combination_max_attempts) is not int or combination_max_attempts < 1):
+            raise ValueError('combination_max_attempts must be a positive integer or None')
+        self.combination_max_attempts = combination_max_attempts
+        if auction_volume_exemption is not None and not callable(auction_volume_exemption):
+            raise ValueError('auction_volume_exemption must be callable or None')
+        self.auction_volume_exemption = auction_volume_exemption
+        self._bar_closes = {}
+        self.execution_details = []
+        self.execution_attempts = []
+        self.lock_releases = []
+        self._unlock_scopes = {}
         self.fees = FeeService(fee_provider)
         self.ledger = ledger
         self.margin_rules = margin_rules
@@ -169,12 +196,17 @@ class Engine:
     def submit(self, legs: list[Instruction], at: datetime, combination=False, mode=None):
         if not legs or at.tzinfo is None or (self.now and at < self.now):
             raise ValueError("Empty operation or invalid submission time")
+        if any(l.price_model == 'locked_close_average' for l in legs) and mode != 'unlock':
+            raise ValueError('Use close_locked for paired average-price releases')
         for leg in legs:
             inst = self.ledger.instruments[leg.instrument]
             if inst.asset == Asset.INDEX or (inst.asset in (Asset.EQUITY, Asset.FUND) and leg.side < 0):
                 raise ValueError("Unsupported trade")
             if leg.effect == "open" and leg.quantity % inst.lot:
                 raise ValueError("Opening quantity must match lot size")
+            if (self.execution_by_instrument.get(leg.instrument,self.config).price_model == 'limit_open_then_market'
+                    and leg.limit_price is None and leg.price_model is None):
+                raise ValueError('limit_open_then_market requires a frozen order quotation')
         if combination and len({leg.group for leg in legs}) != 1:
             raise ValueError("Combination requires one group instance")
         group = legs[0].group
@@ -192,12 +224,66 @@ class Engine:
             self.groups.setdefault(group, dict(expected=sorted({(l.instrument, l.side) for l in legs}), status="opening"))
         return op
 
+    def close_locked(self, instrument, long_group, short_group, at, quantity=None):
+        """Explicitly close overlapping inventory in caller-selected ownership scopes."""
+        if self.now is None or at != self.now:
+            raise ValueError('Lock release requires the current observed frame')
+        inst = self.ledger.instruments[instrument]
+        if inst.asset not in (Asset.FUTURE, Asset.OPTION) or not long_group or not short_group:
+            raise ValueError('Lock release requires derivative inventory and explicit groups')
+        if long_group in self.groups or short_group in self.groups:
+            raise ValueError('Lock release requires independent ownership groups')
+        scopes = {(instrument, long_group), (instrument, short_group)}
+        active = [o for o in self.operations if o.state in ('pending', 'unwinding')
+                  and any((l.instrument, l.group) in scopes for l in o.legs)]
+        for op in active:
+            if op.mode == 'unlock' and self._unlock_scopes.get(op.id) == (instrument, long_group, short_group):
+                return op  # A retry never submits already executed quantities again.
+            if op.mode == 'unlock' or op.combination or any((l.instrument, l.group) not in scopes for l in op.legs):
+                raise ValueError('Lock release cannot cancel a different ownership scope or combination')
+        locked = min(self.ledger.quantity(instrument, 1, long_group),
+                     self.ledger.quantity(instrument, -1, short_group))
+        if quantity is not None and (type(quantity) is not int or not 0 < quantity <= locked):
+            raise ValueError('Release quantity exceeds matched inventory')
+        quantity = locked if quantity is None else quantity
+        if not quantity:
+            return None
+        for op in active:
+            self.cancel(op.id, at, 'self_lock_release')
+        # Stale persistent targets must not recreate the inventory being released.
+        for scope in scopes:
+            self.targets.pop(scope, None)
+        legs = [Instruction(instrument, side, quantity, 'close', group,
+                            price_model='locked_close_average')
+                for side, group in ((1, long_group), (-1, short_group))]
+        op = self.submit(legs, at, mode='unlock')
+        self._unlock_scopes[op.id] = (instrument, long_group, short_group)
+        self.lock_releases.append(dict(operation=op.id, time=at, instrument=instrument,
+                                       long_group=long_group, short_group=short_group, quantity=quantity,
+                                       price_model='locked_close_average', total_adverse_ticks='1'))
+        return op
+
     def target(self, instrument, quantity: int, at: datetime, group="standalone"):
         """Persistent net target; explicit derivative directions use submit instead."""
         if group != "standalone":
             raise ValueError("Combination quantities must be submitted as legs")
         self.targets[instrument, group] = quantity
         self._reconcile_target(instrument, group, at)
+
+    def cancel(self, operation_id: int, at: datetime, reason='strategy_cancel'):
+        """Cancel only outstanding quantities, at the currently observed frame."""
+        if self.now is None or at != self.now or not isinstance(reason, str) or not reason:
+            raise ValueError('Cancellation requires the current frame and a reason')
+        op = next((o for o in self.operations if o.id == operation_id), None)
+        if op is None:
+            raise ValueError('Unknown operation')
+        if op.state not in ('pending', 'unwinding'):
+            return False
+        op.state = 'cancelled'
+        self._warn(op, 'ORDER_CANCELLED', reason=reason,
+                   legs=[dict(instrument=l.instrument, side=l.side, effect=l.effect,
+                              group=l.group, quantity=l.quantity) for l in op.legs])
+        return True
 
     def target_weight(self, instrument, weight, at):
         inst = self.ledger.instruments[instrument]
@@ -247,16 +333,99 @@ class Engine:
         """Engine-level diagnostic (not tied to one operation); also delivered to the callback."""
         self.warnings.append(dict(time=str(self.now), code=code, **extra))
 
-    def _match(self, leg, bar, available_volume):
+    def _market_price(self, leg, bar, cfg):
+        inst = self.ledger.instruments[leg.instrument]
+        price = bar.open + (1 if leg.buy else -1)*cfg.slippage_ticks*inst.tick
+        return min(bar.high, price) if leg.buy else max(bar.low, price)
+
+    def _average_price(self, leg, bar):
+        inst = self.ledger.instruments[leg.instrument]
+        method = 'bar_ohlc4'
+        price = (bar.open+bar.high+bar.low+bar.close)/4
+        if bar.turnover is not None:
+            vwap = bar.turnover/(bar.volume*inst.multiplier)
+            if bar.low <= vwap <= bar.high:
+                price,method = vwap,'bar_vwap'
+            else:
+                method = 'bar_ohlc4_invalid_vwap'
+        # Finite, deterministic price precision keeps actual-price fees and
+        # Fund/group cash sums exact even when turnover/volume is recurring.
+        price = price.quantize(D('0.000000000001'),rounding=ROUND_HALF_EVEN)
+        return min(bar.high,max(bar.low,price)),method
+
+    def _limit_price_quote(self, leg, bar, price, cfg, method):
+        # Aggressive prices cross the entire observed range: execute at the
+        # slipped open. Passive prices beyond the opposite boundary do not trade.
+        if (leg.buy and price > bar.high) or (not leg.buy and price < bar.low):
+            return self._market_price(leg, bar, cfg), bar.start, method+'_marketable', None
+        if bar.low <= price <= bar.high:
+            return price, bar.end, method, None
+        reason = 'REFERENCE_PRICE_NOT_TOUCHED' if method == 'previous_close' else 'LIMIT_PRICE_NOT_TOUCHED'
+        return None, bar.end, method, reason
+
+    def _favorable_limit_quote(self, leg, bar):
+        limit = leg.limit_price
+        if (leg.buy and limit < bar.low) or (not leg.buy and limit > bar.high):
+            return None, bar.end, 'limit_open', 'LIMIT_PRICE_NOT_TOUCHED'
+        price = min(bar.open,limit) if leg.buy else max(bar.open,limit)
+        when = bar.start if price == bar.open else bar.end
+        return price, when, 'limit_open', None
+
+    def _price_quote(self, leg, bar, attempt):
+        """Internal price/time rule; never accepts research-supplied fill prices.
+
+        A first reference-price touch is timestamped at the Bar end because its
+        path is unknown. Later market attempts execute at the next Bar open.
+        """
+        if leg.price_model == 'locked_close_average':
+            if not isinstance(bar, Bar) or bar.end-bar.start != timedelta(minutes=1):
+                when = bar.time if isinstance(bar, Auction) else bar.end
+                return None, when, 'locked_close_average', 'UNLOCK_REQUIRES_MINUTE_BAR'
+            if not bar.volume:
+                return None, bar.end, 'locked_close_average', 'NO_VOLUME'
+            average, method = self._average_price(leg, bar)
+            half_tick = self.ledger.instruments[leg.instrument].tick / 2
+            return average + (1 if leg.buy else -1)*half_tick, bar.end, method+'_half_tick', None
+        if isinstance(bar, Auction):
+            if leg.limit_price is not None and ((leg.buy and leg.limit_price < bar.price)
+                                               or (not leg.buy and leg.limit_price > bar.price)):
+                return None, bar.time, 'auction', 'LIMIT_PRICE_NOT_TOUCHED'
+            return bar.price, bar.time, 'auction', None
+        cfg = self.execution_by_instrument.get(leg.instrument, self.config)
+        inst = self.ledger.instruments[leg.instrument]
+        if cfg.price_model == 'limit_open_then_market':
+            if attempt <= 1:
+                return self._favorable_limit_quote(leg,bar)
+            return self._market_price(leg,bar,cfg),bar.start,'market_open',None
+        if leg.limit_price is not None:
+            return self._limit_price_quote(leg, bar, leg.limit_price, cfg, 'limit')
+        if cfg.price_model == 'bar_average':
+            if bar.volume <= 0:
+                return None, bar.end, 'bar_average', 'NO_VOLUME'
+            price, method = self._average_price(leg, bar)
+            return price, bar.end, method, None
+        if cfg.price_model == 'previous_close_then_open':
+            if attempt <= 1:
+                reference = self._bar_closes.get(leg.instrument)
+                if reference is None or reference[0] > bar.start:
+                    return None, bar.end, 'previous_close', 'NO_REFERENCE_CLOSE'
+                price = reference[1] + (1 if leg.buy else -1)*cfg.slippage_ticks*inst.tick
+                return self._limit_price_quote(leg, bar, price, cfg, 'previous_close')
+            return self._market_price(leg, bar, cfg), bar.start, 'market_open', None
+        return self._market_price(leg, bar, cfg), bar.start, 'next_open', None
+
+    def _match(self, leg, bar, available_volume, attempt=1):
         # self._reject_reason explains a None result; it never influences the decision itself.
         self._reject_reason = None
         inst = self.ledger.instruments[leg.instrument]
         auction = isinstance(bar, Auction)
+        if available_volume is None and not auction:
+            raise ValueError('Volume exemption is only available for an explicit auction')
         opening_price = bar.price if auction else bar.open
         if bar.suspended:
             self._reject_reason = "SUSPENDED"
             return None
-        if bar.volume == 0:
+        if bar.volume == 0 and available_volume is not None:
             self._reject_reason = "NO_VOLUME"
             return None
         if inst.expiry and bar.trading_date > inst.expiry:
@@ -269,18 +438,23 @@ class Engine:
             self._reject_reason = "LOWER_LIMIT"
             return None
         cfg = self.execution_by_instrument.get(inst.id, self.config)
-        qty = min(leg.quantity, available_volume)
+        qty = leg.quantity if available_volume is None else min(leg.quantity, available_volume)
         closeable = None
         if leg.effect == "close":
             closeable = self.ledger.available(leg, bar.trading_date)
             qty = min(qty, closeable)
+            if cfg.price_model == 'bar_average' and qty < closeable:
+                qty = qty // inst.lot * inst.lot
         else:
             qty = qty // inst.lot * inst.lot
         if not qty:
             self._reject_reason = ("NO_CLOSEABLE_POSITION" if closeable == 0
-                                   else "NO_VOLUME_BUDGET" if available_volume <= 0 else "BELOW_LOT_SIZE")
+                                   else "NO_VOLUME_BUDGET" if available_volume is not None and available_volume <= 0 else "BELOW_LOT_SIZE")
             return None
-        price = opening_price if auction else opening_price + (1 if leg.buy else -1) * cfg.slippage_ticks * inst.tick
+        price, fill_time, _, price_error = self._price_quote(leg,bar,attempt)
+        if price_error:
+            self._reject_reason = price_error
+            return None
         if not auction and (price < bar.low or price > bar.high):
             self._reject_reason = "PRICE_OUTSIDE_BAR"
             return None
@@ -288,7 +462,7 @@ class Engine:
             self._reject_reason = "PRICE_OUTSIDE_LIMITS"
             return None
         fee = self._fee_quote(leg, qty, price, bar.trading_date, cfg)['total']
-        return Fill(bar.time if auction else bar.start, bar.trading_date, replace(leg, quantity=qty), price, fee)
+        return Fill(fill_time, bar.trading_date, replace(leg, quantity=qty), price, fee)
 
     def _fee_quote(self, leg, quantity, price, day, cfg, lots=None, balance=None):
         if lots is None and leg.effect == "close":
@@ -338,7 +512,7 @@ class Engine:
                 raise ValueError("Accounting end date mismatch")
         self.now = frame.time
         self._check_holdings(quotes, references)
-        budgets = {i: int(b.volume * self.execution_by_instrument.get(i, self.config).participation) for i, b in quotes.items()}
+        budgets = {i: int(b.volume * self.execution_by_instrument.get(i, self.config).participation_for(b)) for i, b in quotes.items()}
         # Eligibility is decided before any fill; all closing legs precede all opening legs.
         pending = sorted([o for o in self.operations if o.state in ("pending", "unwinding")], key=lambda o: (not any(l.effect == "close" for l in o.legs), o.id))
         eligible = []
@@ -366,16 +540,34 @@ class Engine:
                 phase = 'auction' if isinstance(current,Auction) else 'continuous'
                 self.execution_observer(self._execution_view(at,current.trading_date,phase,opening_marks(at)), 'open')
         remaining_by_id = {o.id: [] for o in eligible}
-        ordered_legs = sorted([(o, j, l) for o in eligible for j, l in enumerate(o.legs)], key=lambda item: (item[2].effect != "close", item[0].id, item[1]))
+        unlock_caps = {}
+        def execution_priority(item):
+            op, index, leg = item
+            quote = quotes.get(leg.instrument)
+            when = self._price_quote(leg,quote,op.attempts)[1] if quote is not None else frame.time
+            return when, leg.effect != 'close', op.id, index
+        ordered_legs = sorted([(o, j, l) for o in eligible for j, l in enumerate(o.legs)], key=execution_priority)
         for op, _, leg in ordered_legs:
             bar = quotes.get(leg.instrument)
             reason = None
+            exempt = False
             if bar and leg.instrument in frame.open_instruments:
-                fill = self._match(leg, bar, budgets.get(leg.instrument, 0))
+                if isinstance(bar,Auction) and op.mode != 'unlock' and self.auction_volume_exemption is not None:
+                    exempt = self.auction_volume_exemption(leg)
+                    if type(exempt) is not bool:
+                        raise ValueError('Auction volume exemption must return a bool')
+                available = None if exempt else budgets.get(leg.instrument, 0)
+                if op.mode == 'unlock':
+                    # Each matched pair uses two units of the SAME contract budget.
+                    if op.id not in unlock_caps:
+                        unlock_caps[op.id] = available // 2 if len(op.legs) == 2 else available
+                    available = min(available, unlock_caps[op.id])
+                fill = self._match(leg, bar, available,op.attempts)
                 reason = self._reject_reason
             else:
                 fill = None
                 reason = "NO_QUOTE" if not bar else "NOT_OPEN"
+            cfg = self.execution_by_instrument.get(leg.instrument,self.config)
             if fill and self.execution_guard:
                 maximum = fill.instruction.quantity
                 cfg=self.execution_by_instrument.get(leg.instrument,self.config)
@@ -404,7 +596,21 @@ class Engine:
                                          fill.trading_date, self.execution_by_instrument.get(leg.instrument, self.config))
                 self.ledger.apply(fill)
                 self.fees.commit(fill, detail)
-                budgets[leg.instrument] -= fill.instruction.quantity
+                if cfg.price_model != 'next_open' or leg.limit_price is not None or leg.price_model is not None or isinstance(bar,Auction):
+                    _, _, method, _ = self._price_quote(leg,bar,op.attempts)
+                    ref = self._bar_closes.get(leg.instrument)
+                    self.execution_details.append(dict(fill_index=len(self.ledger.fills)-1,operation=op.id,
+                                                       method=method,attempt=op.attempts,time=fill.time,
+                                                       bar_start=bar.time if isinstance(bar,Auction) else bar.start,
+                                                       bar_end=bar.time if isinstance(bar,Auction) else bar.end,
+                                                       reference_time=ref[0] if ref else None,
+                                                       reference_close=ref[1] if ref else None,
+                                                       limit_price=leg.limit_price,
+                                                       auction_volume_exempt=exempt,
+                                                       participation=cfg.participation_for(bar),
+                                                       bar_volume=bar.volume, turnover=getattr(bar,'turnover',None)))
+                if not exempt:
+                    budgets[leg.instrument] -= fill.instruction.quantity
                 op.filled.append(fill.instruction)
                 if self.execution_observer:
                     self.execution_observer(self._execution_view(fill.time,fill.trading_date,'auction' if isinstance(bar,Auction) else 'continuous',
@@ -416,6 +622,11 @@ class Engine:
             else:
                 remaining_by_id[op.id].append(leg)
                 self._record_unfilled(op, leg, reason, leg.quantity, 0)
+            if cfg.price_model != 'next_open' or leg.limit_price is not None or leg.price_model is not None:
+                self.execution_attempts.append(dict(operation=op.id,attempt=op.attempts,frame_end=frame.time,
+                                                    instrument=leg.instrument,side=leg.side,effect=leg.effect,group=leg.group,
+                                                    requested=leg.quantity,filled=fill.instruction.quantity if fill else 0,
+                                                    reason='PARTIAL_FILL' if fill and fill.instruction.quantity<leg.quantity else reason if not fill else None))
         for op in eligible:
             remaining = remaining_by_id[op.id]
             op.legs = remaining
@@ -427,7 +638,7 @@ class Engine:
                 continue
             if op.combination:
                 self._warn(op, "COMBINATION_INCOMPLETE", attempt=op.attempts)
-                if op.attempts >= 3 and op.state != "unwinding":
+                if self.combination_max_attempts is not None and op.attempts >= self.combination_max_attempts and op.state != "unwinding":
                     if op.mode in ("open", "roll"):
                         group = remaining[0].group
                         # Open operations have unique groups; roll failure exits the residual group.
@@ -446,6 +657,7 @@ class Engine:
         self.ledger.marks.update(references)
         for i, b in frame.bars.items():
             self.ledger.marks[i] = b.close
+            self._bar_closes[i] = (b.end,b.close)
         for i, auction in frame.auctions.items():
             self.ledger.marks[i] = auction.price
         if on_bar:
@@ -464,10 +676,16 @@ class Engine:
         for op in self.operations:
             if op.state not in ("pending", "unwinding"):
                 continue
-            if any(l.instrument in delivered for l in op.legs):
+            # A pending combination still depends on its original legs even
+            # after a fully filled leg has disappeared from the remainder.
+            # Timeout cleanup is non-combination: surviving exit legs keep
+            # their own trading clock instead of being blocked by old legs.
+            if (op.combination and op.original_instruments.intersection(delivered)
+                    or any(l.instrument in delivered for l in op.legs)):
                 op.state = "expired"
                 self._warn(op, "DELIVERY_INTERRUPTED_OPERATION")
-            elif not op.combination and op.state == "pending" and op.submitted < frame.time and any(l.instrument in frame.settle_instruments for l in op.legs):
+            elif (not op.combination and op.mode != 'unlock' and op.state == "pending"
+                  and op.submitted < frame.time and any(l.instrument in frame.settle_instruments for l in op.legs)):
                 op.state = "expired"
                 self._warn(op, "ORDER_EXPIRED", reason=self._op_reason.get(op.id, "NOT_ATTEMPTED"),
                            legs=[dict(instrument=l.instrument, side=l.side, effect=l.effect, group=l.group, quantity=l.quantity)
@@ -549,7 +767,8 @@ class Engine:
 
     @staticmethod
     def _leg_view(leg):
-        return dict(instrument=leg.instrument, side=leg.side, effect=leg.effect, group=leg.group, quantity=leg.quantity)
+        return dict(instrument=leg.instrument, side=leg.side, effect=leg.effect, group=leg.group,
+                    quantity=leg.quantity, price_model=leg.price_model)
 
     def residual(self):
         """Read-only view of what is still open, pending or unsettled right now."""

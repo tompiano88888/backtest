@@ -25,6 +25,25 @@ def test_missing_reference_date_blocks_publication():
         validate([sample()], 'IF2001.CFE', {date(2020, 1, 2), date(2020, 1, 3)})
 
 
+def test_explicit_no_quote_date_allows_only_declared_gap():
+    days = {date(2020, 1, 2), date(2020, 1, 3)}
+    rows = validate([sample()], 'IF2001.CFE', days, no_quote_dates={date(2020, 1, 3)})
+    assert len(rows) == 1
+    with pytest.raises(ValueError, match='Missing daily-reference'):
+        validate([], 'IF2001.CFE', days, no_quote_dates={date(2020, 1, 3)})
+
+
+def test_quote_on_declared_no_quote_date_is_rejected():
+    with pytest.raises(ValueError, match='Unexpected quote'):
+        validate([sample()], 'IF2001.CFE', {date(2020, 1, 2)},
+                 no_quote_dates={date(2020, 1, 2)})
+
+
+def test_no_quote_date_outside_reference_is_rejected():
+    with pytest.raises(ValueError, match='belong to daily reference'):
+        validate([], 'IF2001.CFE', set(), no_quote_dates={date(2020, 1, 3)})
+
+
 def test_conflicting_duplicate_rejected():
     other = sample()
     other['volume'] = '325'

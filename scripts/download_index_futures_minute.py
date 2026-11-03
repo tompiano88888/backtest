@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 import hashlib
@@ -19,7 +20,10 @@ INDICATORS = 'open;high;low;close;volume;amount;change;sellVolume;buyVolume;open
 FIELDS = INDICATORS.split(';')
 
 
-def validate(records, code, days, *, fields=FIELDS, required=None, integer_volume=True):
+def validate(records, code, days, *, fields=FIELDS, required=None, integer_volume=True,
+             no_quote_dates=frozenset()):
+    if not set(no_quote_dates) <= days:
+        raise ValueError('No-quote dates must belong to daily reference')
     if required is None:
         required = ('open', 'high', 'low', 'close', 'volume', 'amount', 'openInterest')
     rows = {}
@@ -45,7 +49,10 @@ def validate(records, code, days, *, fields=FIELDS, required=None, integer_volum
         if stamp in rows and rows[stamp] != row:
             raise ValueError('Conflicting duplicate timestamp')
         rows[stamp] = row
-    if {s.date() for s in rows} != days:
+    actual_days = {s.date() for s in rows}
+    if actual_days & set(no_quote_dates):
+        raise ValueError('Unexpected quote on declared no-quote date')
+    if actual_days != days - set(no_quote_dates):
         raise ValueError(f'Missing daily-reference dates: {code}')
     return [rows[s] for s in sorted(rows)]
 
@@ -59,6 +66,7 @@ def main(dataset='futures'):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', default='data/index_etf_minute' if is_spot else 'data/index_futures_minute')
     parser.add_argument('--plan', default='outputs/ifind-index-etf-minute-plan.json' if is_spot else 'outputs/ifind-index-futures-minute-plan.json')
+    parser.add_argument('--cache-only', action='store_true', help='Validate and publish cached responses without login or requests')
     args = parser.parse_args()
     plan = json.loads(Path(args.plan).read_text(encoding='utf-8'))
     daily_root = Path('data/index_etf' if is_spot else 'data/index_futures')
@@ -77,16 +85,29 @@ def main(dataset='futures'):
             expected[entry['instrument']] = days
     if set(expected) != {c['instrument'] for c in plan['contracts']}:
         raise ValueError('Plan contracts differ from daily reference')
+    no_quote_dates = {}
+    exceptions = plan.get('no_quote_dates', [])
+    for exception in exceptions:
+        code = exception['instrument']
+        day = date.fromisoformat(exception['date'])
+        if not exception.get('reason', '').strip() or not exception.get('source', '').strip():
+            raise ValueError('No-quote exception requires reason and source')
+        if code not in expected or day not in expected[code]:
+            raise ValueError('No-quote exception outside daily reference')
+        if day in no_quote_dates.setdefault(code, set()):
+            raise ValueError('Duplicate no-quote exception')
+        no_quote_dates[code].add(day)
     root = Path(args.root)
     root.mkdir(parents=True, exist_ok=True)
     schema = pa.schema([('instrument', pa.string()), ('source_timestamp', pa.timestamp('us'))] +
                        [(f, pa.string()) for f in fields])
     def validate_batch(records, code, days):
+        excluded = no_quote_dates.get(code, set()) & days
         if not is_spot:
-            return validate(records, code, days)
+            return validate(records, code, days, no_quote_dates=excluded)
         return validate(records, code, days, fields=fields,
                         required=('open', 'high', 'low', 'close'),
-                        integer_volume=plan['instruments'][code]['asset'] == 'fund')
+                        integer_volume=plan['instruments'][code]['asset'] == 'fund', no_quote_dates=excluded)
     tasks = []
     for code, days in sorted(expected.items()):
         start = min(days)
@@ -97,7 +118,7 @@ def main(dataset='futures'):
                 tasks.append((code, start, end, subset))
             start = end + timedelta(days=1)
     manifest = []
-    with IFinDSource() as source:
+    with (nullcontext(None) if args.cache_only else IFinDSource()) as source:
         for index, (code, start, end, days) in enumerate(tasks, 1):
             request = dict(function='THS_HF', codes=code, indicators=indicators, parameters=parameters,
                            start=f'{start} 00:00:00', end=f'{end} 23:59:59')
@@ -110,11 +131,14 @@ def main(dataset='futures'):
                     raise ValueError('Cache request mismatch')
                 records = cached['records']
             else:
+                if args.cache_only:
+                    raise ValueError(f'Missing cached response: {code}/{start}/{end}')
                 records = source.query(request)
                 temp = raw.with_suffix('.tmp')
                 temp.write_text(json.dumps(dict(request=request, records=records), default=json_default), encoding='utf-8')
                 temp.replace(raw)
             rows = validate_batch(records, code, days)
+            excluded = no_quote_dates.get(code, set()) & days
             # String decimals preserve every supplier digit; no float conversion or rounding.
             encoded = [{k: str(v) if isinstance(v, Decimal) else v for k, v in r.items()} for r in rows]
             path = root / 'partitions' / f'{key}.parquet'
@@ -127,8 +151,10 @@ def main(dataset='futures'):
             if pq.read_table(path).to_pylist() != encoded:
                 raise ValueError('Parquet roundtrip/cache mismatch')
             manifest.append(dict(instrument=code, path=path.relative_to(root).as_posix(), rows=len(rows),
-                                 first=str(rows[0]['source_timestamp']), last=str(rows[-1]['source_timestamp']),
-                                 dates=len(days), sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+                                 first=str(rows[0]['source_timestamp']) if rows else None,
+                                 last=str(rows[-1]['source_timestamp']) if rows else None,
+                                 dates=len(days) - len(excluded), no_quote_dates=sorted(map(str, excluded)),
+                                 sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
                                  raw_path=raw.relative_to(root).as_posix(), raw_sha256=hashlib.sha256(raw.read_bytes()).hexdigest()))
             progress = dict(completed=index, total=len(tasks), rows=sum(e['rows'] for e in manifest), latest=manifest[-1])
             (root / 'progress.json').write_text(json.dumps(progress, indent=2), encoding='utf-8')
@@ -136,8 +162,10 @@ def main(dataset='futures'):
     report = dict(source_daily_version=plan['source_daily_version'], contracts=len(expected),
                   contract_days=sum(len(d) for d in expected.values()), rows=sum(e['rows'] for e in manifest),
                   start=plan['start'], end=plan['end'], source='iFinD THS_HF', parameters=parameters,
+                  no_quote_dates=exceptions,
                   limitations='Vendor timestamps retained without start/end interpretation; not Engine Bars. '
-                  'Date coverage matches pinned daily data; intraday completeness and vendor volume/amount units not independently verified.',
+                  'Date coverage matches pinned daily data except explicitly documented no-quote dates; '
+                  'intraday completeness and vendor volume/amount units not independently verified.',
                   decimal_encoding='Exact decimal strings in Parquet; no float conversion', manifest=manifest)
     fingerprint = hashlib.sha256(json.dumps(report, sort_keys=True).encode()).hexdigest()
     with duckdb.connect(str(root / 'metadata.duckdb')) as db:
