@@ -122,14 +122,14 @@ class StrategyContext:
     def cancel(self, operation_id, reason='strategy_cancel'):
         return self.__engine.cancel(operation_id, self.time, reason)
 
-    def target(self, instrument, quantity):
-        return self.__engine.target(instrument, quantity, self.time)
+    def target(self, instrument, quantity, price_model=None, limit_price=None):
+        return self.__engine.target(instrument, quantity, self.time, price_model=price_model, limit_price=limit_price)
 
-    def target_group(self, instrument, quantity, group):
-        return self.__engine.target_group(instrument, quantity, self.time, group)
+    def target_group(self, instrument, quantity, group, price_model=None, limit_price=None):
+        return self.__engine.target_group(instrument, quantity, self.time, group, price_model=price_model, limit_price=limit_price)
 
-    def target_weight(self, instrument, weight):
-        return self.__engine.target_weight(instrument, weight, self.time)
+    def target_weight(self, instrument, weight, price_model=None, limit_price=None):
+        return self.__engine.target_weight(instrument, weight, self.time, price_model=price_model, limit_price=limit_price)
 
     def close_locked(self, instrument, long_group, short_group, quantity=None):
         return self.__engine.close_locked(instrument, long_group, short_group, self.time, quantity)
@@ -139,6 +139,13 @@ class StrategyContext:
         if type(index) is not int or not 0 <= index <= len(self.__engine.ledger.fills):
             raise ValueError("Invalid fill cursor")
         return tuple(self.__engine.ledger.fills[index:])
+
+    def execution_details_since(self, index=0):
+        """Immutable pricing audit (model, method, attempt, times, order/config source) of the
+        fills with fill index >= index; the confirmation of which price model actually applied."""
+        if type(index) is not int or not 0 <= index <= len(self.__engine.ledger.fills):
+            raise ValueError("Invalid fill cursor")
+        return tuple(MappingProxyType(dict(d)) for d in self.__engine.execution_details if d['fill_index'] >= index)
 
 
 class Engine:
@@ -169,6 +176,8 @@ class Engine:
         self.now: datetime | None = None
         self._counter = 0
         self.targets: dict[tuple, int] = {}
+        # (price_model, limit_price) chosen by the callback for a persistent target.
+        self.target_orders: dict[tuple, tuple] = {}
         self.groups: dict[str, dict] = {}
         self.accounting_events = accounting_events
         self.execution_guard = execution_guard
@@ -263,12 +272,25 @@ class Engine:
                                        price_model='locked_close_average', total_adverse_ticks='1'))
         return op
 
-    def target(self, instrument, quantity: int, at: datetime, group="standalone"):
-        """Persistent net target; explicit derivative directions use submit instead."""
+    def target(self, instrument, quantity: int, at: datetime, group="standalone", price_model=None, limit_price=None):
+        """Persistent net target; explicit derivative directions use submit instead.
+
+        price_model / limit_price are the callback's order-level choice for the orders this target
+        generates (see Instruction.price_model)."""
         if group != "standalone":
             raise ValueError("Combination quantities must be submitted as legs")
+        self._set_target_order(instrument, group, price_model, limit_price)
         self.targets[instrument, group] = quantity
         self._reconcile_target(instrument, group, at)
+
+    def _set_target_order(self, instrument, group, price_model, limit_price):
+        if price_model == 'locked_close_average':
+            raise ValueError('Use close_locked for paired average-price releases')
+        Instruction(instrument, 1, 1, 'open', group, limit_price, price_model)  # validates the combination
+        if price_model is None and limit_price is None:
+            self.target_orders.pop((instrument, group), None)
+        else:
+            self.target_orders[instrument, group] = (price_model, limit_price)
 
     def cancel(self, operation_id: int, at: datetime, reason='strategy_cancel'):
         """Cancel only outstanding quantities, at the currently observed frame."""
@@ -285,7 +307,7 @@ class Engine:
                               group=l.group, quantity=l.quantity) for l in op.legs])
         return True
 
-    def target_weight(self, instrument, weight, at):
+    def target_weight(self, instrument, weight, at, price_model=None, limit_price=None):
         inst = self.ledger.instruments[instrument]
         if inst.asset in (Asset.OPTION, Asset.INDEX):
             raise ValueError("Option weights belong in research; indexes are not tradeable")
@@ -293,9 +315,9 @@ class Engine:
         if nominal <= 0 or self.ledger.last_equity <= 0:
             raise ValueError("Weight sizing requires positive equity and nominal price")
         quantity = int(D(weight) * self.ledger.last_equity / nominal / inst.lot) * inst.lot
-        self.target(instrument, quantity, at)
+        self.target(instrument, quantity, at, price_model=price_model, limit_price=limit_price)
 
-    def target_group(self, instrument, quantity: int, at: datetime, group: str):
+    def target_group(self, instrument, quantity: int, at: datetime, group: str, price_model=None, limit_price=None):
         """Persistent target for one independent single-instrument batch."""
         if not group or group == 'standalone' or group in self.groups:
             raise ValueError('Independent group required; combinations use explicit legs')
@@ -305,6 +327,7 @@ class Engine:
             raise ValueError('Independent target group already belongs to another instrument')
         if type(quantity) is not int:
             raise ValueError('Target quantity must be integer')
+        self._set_target_order(instrument, group, price_model, limit_price)
         self.targets[instrument,group] = quantity
         self._reconcile_target(instrument,group,at)
 
@@ -313,18 +336,20 @@ class Engine:
             if not op.combination and op.state == "pending" and any(l.instrument == instrument and l.group == group for l in op.legs):
                 op.state = "cancelled"
         target = self.targets[instrument, group]
+        order_model, order_limit = self.target_orders.get((instrument, group), (None, None))
         legs = []
         for side in (1, -1):
             held = self.ledger.quantity(instrument, side, group)
             wanted = abs(target) if target * side > 0 else 0
             if held > wanted:
-                legs.append(Instruction(instrument, side, held - wanted, "close", group))
+                legs.append(Instruction(instrument, side, held - wanted, "close", group, order_limit, order_model))
             elif held < wanted:
-                legs.append(Instruction(instrument, side, wanted - held, "open", group))
+                legs.append(Instruction(instrument, side, wanted - held, "open", group, order_limit, order_model))
         if legs:
             self.submit(legs, at)
         elif target == 0 and group != 'standalone':
             self.targets.pop((instrument,group),None)
+            self.target_orders.pop((instrument,group),None)
 
     def _warn(self, op, code, **extra):
         self.warnings.append(dict(time=str(self.now), operation=op.id, code=code, **extra))
@@ -332,6 +357,11 @@ class Engine:
     def _note(self, code, **extra):
         """Engine-level diagnostic (not tied to one operation); also delivered to the callback."""
         self.warnings.append(dict(time=str(self.now), code=code, **extra))
+
+    @staticmethod
+    def _model(leg, cfg):
+        """Effective price model: the order's own choice, else the configured one."""
+        return leg.price_model or cfg.price_model
 
     def _market_price(self, leg, bar, cfg):
         inst = self.ledger.instruments[leg.instrument]
@@ -393,18 +423,19 @@ class Engine:
             return bar.price, bar.time, 'auction', None
         cfg = self.execution_by_instrument.get(leg.instrument, self.config)
         inst = self.ledger.instruments[leg.instrument]
-        if cfg.price_model == 'limit_open_then_market':
+        model = self._model(leg, cfg)
+        if model == 'limit_open_then_market':
             if attempt <= 1:
                 return self._favorable_limit_quote(leg,bar)
             return self._market_price(leg,bar,cfg),bar.start,'market_open',None
         if leg.limit_price is not None:
             return self._limit_price_quote(leg, bar, leg.limit_price, cfg, 'limit')
-        if cfg.price_model == 'bar_average':
+        if model == 'bar_average':
             if bar.volume <= 0:
                 return None, bar.end, 'bar_average', 'NO_VOLUME'
             price, method = self._average_price(leg, bar)
             return price, bar.end, method, None
-        if cfg.price_model == 'previous_close_then_open':
+        if model == 'previous_close_then_open':
             if attempt <= 1:
                 reference = self._bar_closes.get(leg.instrument)
                 if reference is None or reference[0] > bar.start:
@@ -443,7 +474,7 @@ class Engine:
         if leg.effect == "close":
             closeable = self.ledger.available(leg, bar.trading_date)
             qty = min(qty, closeable)
-            if cfg.price_model == 'bar_average' and qty < closeable:
+            if self._model(leg, cfg) == 'bar_average' and qty < closeable:
                 qty = qty // inst.lot * inst.lot
         else:
             qty = qty // inst.lot * inst.lot
@@ -606,6 +637,8 @@ class Engine:
                                                        reference_time=ref[0] if ref else None,
                                                        reference_close=ref[1] if ref else None,
                                                        limit_price=leg.limit_price,
+                                                       price_model=self._model(leg,cfg),
+                                                       price_model_source='order' if leg.price_model else 'config',
                                                        auction_volume_exempt=exempt,
                                                        participation=cfg.participation_for(bar),
                                                        bar_volume=bar.volume, turnover=getattr(bar,'turnover',None)))
@@ -624,6 +657,8 @@ class Engine:
                 self._record_unfilled(op, leg, reason, leg.quantity, 0)
             if cfg.price_model != 'next_open' or leg.limit_price is not None or leg.price_model is not None:
                 self.execution_attempts.append(dict(operation=op.id,attempt=op.attempts,frame_end=frame.time,
+                                                    price_model=self._model(leg,cfg),
+                                                    price_model_source='order' if leg.price_model else 'config',
                                                     instrument=leg.instrument,side=leg.side,effect=leg.effect,group=leg.group,
                                                     requested=leg.quantity,filled=fill.instruction.quantity if fill else 0,
                                                     reason='PARTIAL_FILL' if fill and fill.instruction.quantity<leg.quantity else reason if not fill else None))
@@ -648,6 +683,9 @@ class Engine:
                                 key = p.instrument, p.side
                                 quantities[key] = quantities.get(key, 0) + p.quantity
                         op.legs = [Instruction(i, s, q, "close", group) for (i, s), q in quantities.items()]
+                        if any(l.price_model or l.limit_price is not None for l in (*remaining, *op.filled)):
+                            # Engine-generated exits carry no order-level model or quotation.
+                            self._warn(op, "UNWIND_USES_CONFIGURED_PRICE_MODEL")
                     op.state = "unwinding" if op.legs else "unwound"
                     # Cleanup is no longer gated by unavailable original legs.
                     op.combination = False
@@ -693,7 +731,12 @@ class Engine:
         for key in list(self.targets):
             if key[0] in delivered:
                 del self.targets[key]
+                self.target_orders.pop(key, None)
             elif key[0] in frame.settle_instruments:
+                if self.target_orders.get(key, (None, None))[1] is not None:
+                    # A frozen limit quotation is only valid for the decision it was made with;
+                    # the callback must issue the target again with a fresh quotation.
+                    continue
                 self._reconcile_target(*key, frame.time)
         if frame.accounting_day_end:
             self.accounting_events.end(frame.accounting_day_end, self.ledger, self.margin_rules)
@@ -783,6 +826,58 @@ class Engine:
             expired_operations=sum(1 for o in self.operations if o.state == "expired"),
             past_delivery=sorted(held & self._delivery_flagged),
             stale_quotes=sorted(held & self._stale_flagged))
+
+    def execution_report(self):
+        """Read-only disclosure of the matching settings this run actually used: the configured
+        default price model, per-instrument overrides, and every order-level choice made by the
+        callback with its operations, fills, methods and miss reasons."""
+        def config_view(cfg):
+            return {k: (str(v) if isinstance(v, Decimal) else v) for k, v in cfg.__dict__.items()}
+        rows: dict[tuple, dict] = {}
+        def row(model, source):
+            return rows.setdefault((model, source), dict(
+                price_model=model, source=source, operations=0, fills=0, filled_quantity=0, pending_legs=0,
+                limit_quotations=0, methods={}, unfilled_reasons={}))
+        def key_of(instruction):
+            cfg = self.execution_by_instrument.get(instruction.instrument, self.config)
+            return self._model(instruction, cfg), 'order' if instruction.price_model else 'config'
+        for op in self.operations:
+            for key in {key_of(i) for i in (*op.legs, *op.filled)}:
+                row(*key)['operations'] += 1
+            if op.state in ('pending', 'unwinding'):
+                for leg in op.legs:
+                    row(*key_of(leg))['pending_legs'] += 1
+        for fill in self.ledger.fills:
+            item = row(*key_of(fill.instruction))
+            item['fills'] += 1
+            item['filled_quantity'] += fill.instruction.quantity
+            item['limit_quotations'] += fill.instruction.limit_price is not None
+        for detail in self.execution_details:
+            item = row(detail['price_model'], detail['price_model_source'])
+            item['methods'][detail['method']] = item['methods'].get(detail['method'], 0) + 1
+        for attempt in self.execution_attempts:
+            if attempt['reason']:
+                item = row(attempt['price_model'], attempt['price_model_source'])
+                item['unfilled_reasons'][attempt['reason']] = item['unfilled_reasons'].get(attempt['reason'], 0) + 1
+        return dict(
+            selection="Order-level price model chosen by the strategy callback via Instruction.price_model "
+                      "(or the price_model/limit_price arguments of target*); exactly one model per order; "
+                      "orders without a choice use the configured default.",
+            order_models=dict(
+                limit_open_then_market="frozen limit_price = signal price +/- strategy offset; next Bar: open if the open is not worse than "
+                                       "the quotation, else the quotation if the Bar reaches it (never outside [low, high]); "
+                                       "unfilled remainder continues as capped market orders",
+                bar_average="turnover / (volume * multiplier) if inside [low, high], else (O+H+L+C)/4; no tick offset",
+                next_open="open +/- slippage ticks, capped at the Bar high/low",
+                previous_close_then_open="previous close +/- slippage ticks touch, then next-open market"),
+            participation=dict(configured=None if self.config.participation is None else str(self.config.participation),
+                               rule="None: 50% for one-minute Bars, 10% for daily/other Bars and auctions; "
+                                    "shared by all orders of an instrument in a Bar"),
+            default_config=config_view(self.config),
+            instrument_overrides={i: config_view(c) for i, c in self.execution_by_instrument.items()},
+            modes=sorted(rows.values(), key=lambda r: (r['price_model'], r['source'])),
+            engine_generated_orders="timeout exits and rolls use the configured price model",
+        )
 
     def finalize(self):
         """End-of-run diagnostics, once. Orders submitted by the last callback could never be

@@ -9,6 +9,7 @@
 - `performance.png`：累计PnL、日终回撤、年度表、8项汇总指标。
 - `metrics.json`：定义、指标、适用性提示、逐日与年度数据。
 - `annual.csv`、`daily.csv`：可核对的年度及逐日明细。
+- `execution_modes.json`（完整运行时）：撮合设置披露——配置默认价格模型、回调逐单选择的模型及各模型成交/未成交统计，图片底行为其摘要；见 [ORDER_LEVEL_EXECUTION.md](ORDER_LEVEL_EXECUTION.md)。
 
 收益/PnL/CAGR按正红负绿零黑；回撤幅度绿色；夏普、卡尔玛、波动率、权益等非涨跌值黑色。PnL曲线统一蓝色，回撤面积保留原红色。标题、日期、初始资金、年度表均取实际运行数据，不绑定任何策略或年份。图表需要matplotlib，已列入基础依赖；部署机器需要中文字体（Windows默认使用Microsoft YaHei）。
 

@@ -43,6 +43,11 @@ engine.step(frame, on_bar=on_bar)
 不根据回调频率推断；其他粒度可显式设置参与率。非空participation是跨粒度固定覆盖值。
 同标的同Bar所有订单共享向下取整后的数量预算，开仓还按交易单位取整。
 成交量预算、涨跌停和可平数量仍生效。显式报价无法触及时记LIMIT_PRICE_NOT_TOUCHED。
+
+订单级价格模型：回调可在每笔`Instruction`上设置`price_model`（`limit_open_then_market`须带`limit_price`=信号价±加点的冻结报价；`bar_average`；`next_open`；`previous_close_then_open`），
+`ctx.target/target_group/target_weight`同样有`price_model`、`limit_price`参数；未设置的报单使用`ExecutionConfig.price_model`。
+`ctx.execution_details_since(cursor)`返回新成交的定价依据（模型、来源order/config、方法、尝试次数）。
+运行结果`execution_modes`（`Engine.execution_report()`）及`standard_report/execution_modes.json`披露默认模型、逐单选择、参与率及各模型成交/未成交统计。详见[ORDER_LEVEL_EXECUTION.md](ORDER_LEVEL_EXECUTION.md)。
 回调可见 `time/bars/marks/account/positions/warnings`，提交方法为 `submit/target/target_weight`。
 研究代码是可信本地代码；只读上下文避免意外修改，不是恶意代码安全沙箱。
 

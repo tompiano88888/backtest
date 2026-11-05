@@ -107,6 +107,10 @@ class Bar:
                 raise ValueError("Non-finite optional field")
 
 
+# Price models a callback may select per order via Instruction.price_model (None = configured model).
+ORDER_PRICE_MODELS = ('next_open', 'previous_close_then_open', 'bar_average', 'limit_open_then_market')
+
+
 @dataclass(frozen=True)
 class Instruction:
     instrument: str
@@ -115,16 +119,25 @@ class Instruction:
     effect: str = "open"
     group: str = "standalone"
     limit_price: Decimal | None = None  # order quotation, never a supplied fill price
-    price_model: str | None = None  # explicit close-only execution policy
+    price_model: str | None = None  # order-level price model chosen by the callback (None = configured)
 
     def __post_init__(self):
         if self.side not in (-1, 1) or type(self.quantity) is not int or self.quantity <= 0 or self.effect not in ("open", "close"):
             raise ValueError("Invalid instruction")
         if self.limit_price is not None:
             object.__setattr__(self, 'limit_price', D(self.limit_price))
-        if self.price_model is not None:
-            if self.price_model != 'locked_close_average' or self.effect != 'close' or self.limit_price is not None:
+        if self.price_model == 'locked_close_average':
+            if self.effect != 'close' or self.limit_price is not None:
                 raise ValueError('locked_close_average requires a close without a limit quotation')
+        elif self.price_model is not None:
+            # Order-level price model chosen by the strategy callback; overrides the configured one.
+            if self.price_model not in ORDER_PRICE_MODELS:
+                raise ValueError(f'Unknown order price model: {self.price_model!r}')
+            if self.price_model == 'limit_open_then_market':
+                if self.limit_price is None or self.limit_price <= 0:
+                    raise ValueError('limit_open_then_market requires a positive frozen limit_price (signal price plus offset)')
+            elif self.limit_price is not None and self.price_model != 'next_open':
+                raise ValueError(f'{self.price_model} is a market-intent model and takes no limit_price')
 
     @property
     def buy(self) -> bool:

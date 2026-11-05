@@ -2,6 +2,8 @@
 
 ## 已实现
 
+- 订单级价格模型：回调可对每笔报单（含持续目标）选择`limit_open_then_market`（冻结报价=信号价±加点）、`bar_average`、`next_open`、`previous_close_then_open`之一，未选择的用配置默认；定价、参与率和费用规则沿用统一Engine。`ctx.execution_details_since`供回调确认定价依据，运行结果`execution_modes`、`standard_report/execution_modes.json`和图片底行披露设置。限制：带限价的持续目标不跨日自动重提；引擎生成的超时退出/展期腿用配置默认并警告；第一Bar未成交余量按原规则转受限市价。详见docs/ORDER_LEVEL_EXECUTION.md。
+
 - 显式自锁解除接口及第一连续分钟无开仓信号调度：指定归属、重叠数量、成交分钟均价、
   双边合计一跳、共享容量和部分成交持续重试。策略负责信号及日历；不默认清理其他策略。
 
