@@ -60,11 +60,12 @@ def recorder():
 
 
 def test_unfilled_then_expired_orders_reach_callback_with_reasons():
-    # open + 1 tick of slippage lies above the bar high: the order cannot fill and (one-shot) expires.
+    # No volume in the eligible bar: the order cannot fill and (one-shot) expires.
     cfg = scenario([frame(D1, [bar("A", D1, "100", "101", "99", "100", "100")], ["A"]),
                     frame(D2, [bar("A", D2, "102", "102", "100", "101", "101")], ["A"]),
                     frame(D3, [bar("A", D3, "101", "102", "100", "101", "101")], ["A"])],
                    [buy(D1)], slip=1)
+    cfg['frames'][1]['bars'][0]['volume'] = 0
     callback = recorder()
     engine = run_scenario(cfg, callback)
     # Behaviour is unchanged: the order is dropped and nothing is held.
@@ -72,8 +73,8 @@ def test_unfilled_then_expired_orders_reach_callback_with_reasons():
     assert engine.ledger.lots == []
     # The failed attempt is known in the same frame's callback; the expiry arrives at the next one.
     assert callback.seen[D1] == []
-    assert callback.seen[D2] == [("ORDER_UNFILLED", "PRICE_OUTSIDE_BAR")]
-    assert callback.seen[D3] == [("ORDER_EXPIRED", "PRICE_OUTSIDE_BAR")]
+    assert callback.seen[D2] == [("ORDER_UNFILLED", "NO_VOLUME")]
+    assert callback.seen[D3] == [("ORDER_EXPIRED", "NO_VOLUME")]
     unfilled = next(w for w in engine.warnings if w["code"] == "ORDER_UNFILLED")
     assert (unfilled["instrument"], unfilled["requested"], unfilled["filled"], unfilled["remaining"]) == ("A", 1, 0, 1)
     expired = next(w for w in engine.warnings if w["code"] == "ORDER_EXPIRED")

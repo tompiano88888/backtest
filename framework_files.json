@@ -20,6 +20,7 @@
   "docs/ACCOUNT_EVENTS.md",
   "docs/API.md",
   "docs/EXECUTION_FEES.md",
+  "docs/ORDER_LEVEL_EXECUTION.md",
   "docs/RESEARCHER_GUIDE.md",
   "docs/STANDARD_PERFORMANCE.md",
   "examples/account_events.synthetic.json",

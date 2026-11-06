@@ -11,7 +11,7 @@ def fixture():
     inst = Instrument('IF2601.CFE', Asset.FUTURE, Account.FUTURES, 'CFFEX', 'IF',
                       D(300), D('.2'), 1, date(2026,1,16), date(2026,1,16))
     e = Engine(Ledger({inst.id:inst}, 1000000), {inst.id:MarginRule('future',D('.15'))},
-               ExecutionConfig(participation=D(1)))
+               ExecutionConfig(participation=D(1),slippage_ticks=0))
     return inst, e
 
 
@@ -23,7 +23,7 @@ def bar(code, day, hm, price):
 
 def test_guard_only_sees_opening_marks_and_can_shrink_with_exact_fees():
     inst,engine=fixture()
-    engine.config=ExecutionConfig(participation=D(1),fee_rate=D('.000023'))
+    engine.config=ExecutionConfig(participation=D(1),slippage_ticks=0,fee_rate=D('.000023'))
     day=date(2026,1,5)
     b=bar(inst.id,day,'09:32',100)
     engine.submit([Instruction(inst.id,1,5)],b.start)
@@ -82,7 +82,7 @@ def test_guard_cannot_increase_quantity_and_observes_previous_actual_fill():
 def test_close_today_fee_rate_uses_actual_fifo_dates():
     inst,engine=fixture()
     old=date(2026,1,5);day=old+timedelta(days=1)
-    engine.config=ExecutionConfig(participation=D(1),fee_rate=D('.000023'),close_today_fee_rate=D('.00023'))
+    engine.config=ExecutionConfig(participation=D(1),slippage_ticks=0,fee_rate=D('.000023'),close_today_fee_rate=D('.00023'))
     for d,q in [(old,2),(day,3)]:
         engine.ledger.apply(Fill(bar(inst.id,d,'09:31',100).start,d,Instruction(inst.id,1,q),D(100),D(0)))
     b=bar(inst.id,day,'09:32',100)

@@ -1,6 +1,6 @@
 # AKShare 股票、期货日线回测
 
-`backtest_akshare` 从原统一框架分出，公共入口只提供 **AKShare 日线下载和股票／实际期货合约回测**。沿用 Decimal 账务、统一资金池、下一 Bar 开盘撮合、T+1、参与率、费用、组合重试及期货逐日结算。不提供分钟、竞价、ETF、期权或 iFinD CLI。
+`backtest_akshare` 从原统一框架分出，公共入口只提供 **AKShare 日线下载和股票／实际期货合约回测**。沿用 Decimal 账务、统一资金池、下一允许日线撮合、T+1、参与率、费用、组合重试及期货逐日结算。不提供分钟、竞价、ETF、期权或 iFinD CLI。
 
 ## 安装与运行
 
@@ -51,7 +51,7 @@ engine, scenario = run(config, "data/akshare", version, on_bar=on_bar, output="o
 
 本分支只交付通用回测核心、AKShare日线适配、标准报告与合成示例。具体策略、因子、参数搜索、研究节点、数据和运行成果放独立项目，或被忽略的research/、strategies/、work/目录，不上传框架Git。
 
-完整CLI回测默认输出结果JSON及同名目录下standard_report四项文件。Python完整运行使用run(..., output="outputs/unique/result.json")；底层run_scenario(output=...)与save_result也提供统一输出。旧report_output参数保留用于兼容只生成报告的调用，不代替完整成交审计文件。
+完整CLI回测默认输出结果JSON及同名目录下的标准绩效报告。报告图片与 `execution_modes.json` 披露默认撮合模型、逐单选择及参与率，结果 JSON 保留逐笔定价依据。日线默认共享成交量的 10%，默认滑点为一跳，需按裸开盘价复现旧配置时可显式设置 `slippage_ticks: 0`。详见[日线撮合规则](docs/ORDER_LEVEL_EXECUTION.md)。Python完整运行使用run(..., output="outputs/unique/result.json")；底层run_scenario(output=...)与save_result也提供统一输出。旧report_output参数保留用于兼容只生成报告的调用，不代替完整成交审计文件。
 
 离线合成接入示例（无需联网或下载数据）：
 

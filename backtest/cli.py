@@ -59,6 +59,6 @@ def demo_config():
         frames.append(dict(time=start + timedelta(minutes=n), open_instruments=["A", "B"], bars=bars))
     cfg = dict(initial_cash="10000", instruments=instruments,
                margin_rules={i: dict(model="future", rate="0.1") for i in ("A", "B")},
-               execution=dict(participation="1", fee_per_unit="2"),
+               execution=dict(participation="1", slippage_ticks=0, fee_per_unit="2"),
                instructions=[dict(at=start, combination=True, legs=[dict(instrument="A", side=1, quantity=2, group="demo-pair"), dict(instrument="B", side=-1, quantity=2, group="demo-pair")])], frames=frames)
     return json.loads(json.dumps(cfg, default=json_default))

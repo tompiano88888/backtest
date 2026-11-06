@@ -6,7 +6,8 @@
 
 结果目录的`standard_report/`包含：
 
-- `performance.png`：累计PnL、日终回撤、年度表、8项汇总指标。
+- `performance.png`：累计PnL、日终回撤、年度表、8项汇总指标及撮合规则摘要。
+- `execution_modes.json`：默认及按标的配置、逐单选择、实际成交方法和失败原因汇总。相同信息写入结果 JSON 和 `metrics.json` 的 `execution_modes`。直接调用 `export_performance` 时可传入 `execution=engine.execution_report()`。
 - `metrics.json`：定义、指标、适用性提示、逐日与年度数据。
 - `annual.csv`、`daily.csv`：可核对的年度及逐日明细。
 

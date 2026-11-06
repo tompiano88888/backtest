@@ -31,13 +31,17 @@ engine.step(frame, on_bar=on_bar)
 回调可见 `time/bars/marks/account/positions/warnings`，提交方法为 `submit/target/target_weight`。
 研究代码是可信本地代码；只读上下文避免意外修改，不是恶意代码安全沙箱。
 
+### 日线撮合
+
+`execution.price_model` 配置全局默认，`execution_by_instrument` 可按标的覆盖。预生成指令和回调可通过 `Instruction.price_model` 或目标指令逐单选择。用 `ctx.execution_details_since(cursor)` 查询成交定价，用 `ctx.cancel(operation_id)` 取消未成交余量。见[日线撮合规则](ORDER_LEVEL_EXECUTION.md)。
+
 ### 警告与诊断（`ctx.warnings`）
 
 引擎产生的**所有**警告（`engine.warnings` 中的每一条，包括组合重试、交割中断、资金风险等原有代码）按产生顺序交给回调，每条只交付一次：`ctx.warnings` 是自上次回调以来新增警告的只读元组，每条为只读映射（含 `time`、`code` 及各代码的附加字段）。回调可据此重新下单、停止开仓、记录，或抛异常终止回测，研究和策略因此可以提前设计应对。回调之后才产生的警告（结算、过期、资金风险）在下一次回调交付；最后一次回调之后产生的只出现在 `engine.warnings` 和结果里。警告只增加可见性，不改变撮合、过期规则或账务结果。
 
 | 代码 | 产生时点 | 含义 |
 |---|---|---|
-| `ORDER_UNFILLED` | 撮合后、回调前 | 非组合指令本 Bar 未（完全）成交。`reason`：`SUSPENDED`、`NO_VOLUME`、`AFTER_EXPIRY`、`UPPER_LIMIT`、`LOWER_LIMIT`、`NO_CLOSEABLE_POSITION`、`NO_VOLUME_BUDGET`、`BELOW_LOT_SIZE`、`PRICE_OUTSIDE_BAR`（含滑点把价格推出区间）、`PRICE_OUTSIDE_LIMITS`、`NO_QUOTE`、`NOT_OPEN`、`GUARD_DEFERRED`、`PARTIAL_FILL`；同一指令的原因或剩余数量变化时才再次提示 |
+| `ORDER_UNFILLED` | 撮合后、回调前 | 非组合指令本 Bar 未（完全）成交。`reason`：`SUSPENDED`、`NO_VOLUME`、`AFTER_EXPIRY`、`UPPER_LIMIT`、`LOWER_LIMIT`、`NO_CLOSEABLE_POSITION`、`NO_VOLUME_BUDGET`、`BELOW_LOT_SIZE`、`PRICE_OUTSIDE_BAR`（防御性检查）、`PRICE_OUTSIDE_LIMITS`、`NO_QUOTE`、`NOT_OPEN`、`GUARD_DEFERRED`、`PARTIAL_FILL`、`LIMIT_PRICE_NOT_TOUCHED`、`REFERENCE_PRICE_NOT_TOUCHED`、`NO_REFERENCE_CLOSE`。同一指令的原因或剩余数量变化时再次提示 |
 | `ORDER_EXPIRED` | 帧结束后 | 非组合指令按 `settle_instruments` 规则到期仍未成交；带最后一次 `reason` 和未成交腿 |
 | `POSITION_PAST_DELIVERY` | 帧开始 | 持仓合约已过交割日仍没有结算；引擎不自行结算，持仓保持末次估值 |
 | `STALE_QUOTE` | 帧开始 | 持仓标的连续 `stale_quote_days`（默认 3）个交易日没有行情或 `valuation_marks`；`config["stale_quote_days"]` 或 `Engine(stale_quote_days=...)` 配置，`None` 关闭；每段缺失只提示一次 |

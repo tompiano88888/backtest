@@ -102,10 +102,12 @@ def run_scenario(config, on_bar=None, *, output=None, strategy=None):
             at = datetime.fromisoformat(event["at"])
             if "legs" in event:
                 engine.submit([Instruction(**leg) for leg in event["legs"]], at, event.get("combination", False))
-            elif "weight" in event:
-                engine.target_weight(event["instrument"], event["weight"], at)
             else:
-                engine.target(event["instrument"], event["quantity"], at)
+                pricing = {key: event[key] for key in ("price_model", "limit_price") if key in event}
+                if "weight" in event:
+                    engine.target_weight(event["instrument"], event["weight"], at, **pricing)
+                else:
+                    engine.target(event["instrument"], event["quantity"], at, **pricing)
             index += 1
         bars = {r["instrument"]: bar_from_record(r) for r in row.get("bars", [])}
         auctions = {r['instrument']:auction_from_record(r) for r in row.get('auctions',[])}
@@ -148,6 +150,7 @@ def result(engine, config):
         if peak > 0:
             drawdown = max(drawdown, (peak - row["equity"]) / peak)
     code = hashlib.sha256()
+    execution_modes = engine.execution_report()
     for path in sorted(Path(__file__).parent.glob("*.py")):
         code.update(path.name.encode())
         code.update(path.read_bytes())
@@ -159,13 +162,15 @@ def result(engine, config):
                         data_version=config.get("data_version", "inline-scenario"),
                         strategy=getattr(engine, "strategy", None)),
         assumptions=["unified_cash_pool", "no_funding_admission_gate", "cash_delivery", "no_forced_liquidation", "bar_liquidity_approximation"] +
+                    (["order_level_price_models"] if any(m["source"] == "order" for m in execution_modes["modes"]) else []) +
                     (["explicit_calendar_accounting_clock", "dividend_net_receivable_on_ex_date_cash_on_payment_day_start",
                       "configured_dividend_tax_assumption_not_automatic_stock_tax_law",
                       "idle_cash_estimated_daily_income_not_repo_order_simulation"] if engine.accounting_events else []),
-        final=asdict(final), max_drawdown=drawdown, group_pnl=engine.ledger.group_pnl(),
+        final=asdict(final), max_drawdown=drawdown, group_pnl=engine.ledger.group_pnl(), execution_modes=execution_modes,
         snapshots=engine.snapshots, positions=[asdict(p) for p in engine.ledger.lots],
         fills=[asdict(f) for f in engine.ledger.fills], cash_entries=engine.ledger.entries,
         fee_details=engine.fees.details,
+        execution_details=engine.execution_details, execution_attempts=engine.execution_attempts,
         fee_provenance=(dict(version=engine.fees.provider.version, as_of=engine.fees.provider.as_of)
                         if engine.fees.provider is not None else None),
         noncash_entries=engine.ledger.noncash_entries,

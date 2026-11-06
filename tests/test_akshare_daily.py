@@ -1,10 +1,11 @@
 from copy import deepcopy
+import json
 from types import SimpleNamespace
 
 import pytest
 
 from backtest.akshare_daily import download, run, update, validate
-from backtest.models import D
+from backtest.models import D, Instruction
 from backtest.storage import Store
 
 
@@ -21,7 +22,7 @@ class Table:
 def config():
     return dict(initial_cash='10000', frequency='1d',
                 instruments=[dict(id='600000.SH', asset='equity', account='security', exchange='SSE', product='stock', lot=100, sell_delay_days=1)],
-                symbols={'600000.SH': '600000'}, execution=dict(participation='1'),
+                symbols={'600000.SH': '600000'}, execution=dict(participation='1', slippage_ticks=0),
                 instructions=[dict(at='2024-01-02T15:00:00+08:00', instrument='600000.SH', quantity=100)],
                 sessions=[dict(instrument='600000.SH', trading_date=f'2024-01-0{day}', start=f'2024-01-0{day}T09:30:00+08:00', end=f'2024-01-0{day}T15:00:00+08:00', upper_limit='20', lower_limit='1') for day in (2, 3)])
 
@@ -111,7 +112,6 @@ def test_non_akshare_snapshot_rejected(tmp_path):
 
 
 def test_standard_report_preserves_snapshot_execution(tmp_path):
-    import json
     from backtest.runner import result
     cfg = config()
     version = update(cfg, tmp_path / 'store', stock_api())
@@ -126,7 +126,6 @@ def test_standard_report_preserves_snapshot_execution(tmp_path):
 
 
 def test_complete_output_preserves_execution_and_exports_audit(tmp_path):
-    import json
     from backtest.runner import result
     cfg = config()
     version = update(cfg, tmp_path/'store', stock_api())
@@ -138,10 +137,80 @@ def test_complete_output_preserves_execution_and_exports_audit(tmp_path):
     assert D(payload['final']['pnl']) == D(100)
     assert 'no_automatic_corporate_actions' in payload['assumptions']
     assert 'residual' in payload
+    report = tmp_path/'complete/standard_report'
+    modes = json.loads((report/'execution_modes.json').read_text(encoding='utf-8'))
+    assert modes == payload['execution_modes']
+    assert modes == json.loads((report/'metrics.json').read_text(encoding='utf-8'))['execution_modes']
+    assert modes['modes'][0]['methods'] == {'next_open': 1}
     assert {p.name for p in (tmp_path/'complete/standard_report').iterdir()} == {
-        'performance.png', 'metrics.json', 'annual.csv', 'daily.csv'}
+        'performance.png', 'metrics.json', 'annual.csv', 'daily.csv', 'execution_modes.json'}
     with pytest.raises(ValueError, match='Choose output'):
         run(cfg, tmp_path/'store', version, output=output, report_output=tmp_path/'other')
+
+
+@pytest.mark.parametrize(('model', 'quote', 'first_price', 'first_method'), [
+    ('limit_open_then_market', '10.50', '10.50', 'limit_open'),
+    ('previous_close_then_open', None, '10.01', 'previous_close'),
+])
+def test_daily_models_retry_only_the_remainder(tmp_path, model, quote, first_price, first_method):
+    cfg = config()
+    cfg['execution'] = {}
+    cfg['initial_cash'] = '10000'
+    cfg['instructions'] = []
+    cfg['sessions'].append({key: value.replace('2024-01-03', '2024-01-04')
+                            for key, value in cfg['sessions'][-1].items()})
+    rows = [dict(日期=f'2024-01-0{day}', 开盘=11 if day == 3 else 10,
+                 最高=11 if day == 4 else 12, 最低=9,
+                 收盘=10 if day == 2 else 11, 成交量=10) for day in (2, 3, 4)]
+    store = tmp_path/'store'
+    version = update(cfg, store, stock_api(rows))
+    seen = []
+
+    def on_bar(ctx):
+        bar = ctx.bars['600000.SH']
+        if bar.trading_date.day == 2:
+            ctx.target(bar.instrument, 200, price_model=model, limit_price=quote)
+        seen.extend(ctx.execution_details_since(len(seen)))
+
+    engine, _ = run(cfg, store, version, on_bar=on_bar)
+    assert [(f.trading_date.day, f.time.hour, f.instruction.quantity, f.price)
+            for f in engine.ledger.fills] == [(3, 15, 100, D(first_price)), (4, 9, 100, D('10.01'))]
+    assert [(r['attempt'], r['method'], r['price_model_source']) for r in seen] == [
+        (1, first_method, 'order'), (2, 'market_open', 'order')]
+    assert [r['reason'] for r in engine.execution_attempts] == ['PARTIAL_FILL', None]
+    assert engine.ledger.cash == D(10000) - 100 * (D(first_price) + D('10.01'))
+
+
+def test_daily_models_share_capacity_and_cli_reports_effective_rules(tmp_path, monkeypatch):
+    from backtest import cli
+
+    cfg = config()
+    cfg['execution'] = {}
+    instrument = '600000.SH'
+    cfg['execution_by_instrument'] = {instrument: {'price_model': 'bar_average', 'participation': '0.2'}}
+    cfg['instructions'] = [dict(at='2024-01-02T15:00:00+08:00', legs=[
+        dict(instrument=instrument, side=1, quantity=200),
+        dict(instrument=instrument, side=1, quantity=100, price_model='next_open'),
+    ])]
+    rows = [dict(日期=f'2024-01-0{day}', 开盘=10, 最高='10.005', 最低=9,
+                 收盘=10, 成交量=10) for day in (2, 3)]
+    store = tmp_path/'store'
+    version = update(cfg, store, stock_api(rows))
+    config_path = tmp_path/'config.json'
+    config_path.write_text(json.dumps(cfg), encoding='utf-8')
+    output = tmp_path/'run.json'
+    monkeypatch.setattr('sys.argv', ['backtest', 'run', str(config_path), '--root', str(store),
+                                    '--version', version, '--output', str(output)])
+    cli.main()
+    result = json.loads(output.read_text(encoding='utf-8'))
+    # Open fills before the average despite being submitted second. Only 100 shares remain.
+    assert [(D(f['price']), f['instruction']['quantity']) for f in result['fills']] == [
+        (D('10.005'), 100), (D('9.75125'), 100)]
+    assert D(result['final']['pnl']) == D('24.375')
+    assert result['execution_modes']['instrument_overrides'][instrument]['price_model'] == 'bar_average'
+    assert [(r['method'], r['price_model_source']) for r in result['execution_details']] == [
+        ('next_open', 'order'), ('bar_ohlc4', 'config')]
+    assert (tmp_path/'run/standard_report/execution_modes.json').is_file()
 
 
 def test_replay_is_read_only_shareable_and_records_strategy(tmp_path):

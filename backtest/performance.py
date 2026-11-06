@@ -117,10 +117,15 @@ def statistics(rows, initial, start):
 
 def export_performance(rows, initial, start, output, *, title='回测表现', subtitle='统一资金池',
                        minute_drawdown=None, caveat='研究假设及数据边界以本次回测配置为准。',
-                       observation_basis='explicit_daily_equity'):
-    """Public finalizer. Call once on full-account daily data after a completed run."""
+                       observation_basis='explicit_daily_equity', execution=None):
+    """Public finalizer. Call once on full-account daily data after a completed run.
+
+    ``execution`` is Engine.execution_report() (also stored in the run payload); when given, the
+    matching settings are disclosed on the figure and in metrics.json / execution_modes.json.
+    """
     metrics = statistics(rows, initial, start)
     metrics['observation_basis'] = observation_basis
+    metrics['execution_modes'] = execution
     metrics['minute_max_drawdown'] = str(minute_drawdown) if minute_drawdown is not None else None
     out = Path(output) / 'standard_report'
     out.mkdir(parents=True, exist_ok=True)
@@ -130,8 +135,11 @@ def export_performance(rows, initial, start, output, *, title='回测表现', su
             extra = '按交易日最后可见观察估值；非完整日终结算验收'
         if metrics['issues']:
             caveat = '注意：样本不足或权益非正时，不适用的风险指标显示“—”；PnL与实际亏损完整保留。'
-        plot(metrics,title,subtitle,'#3d62a8',extra,caveat,out/'performance.png')
+        plot(metrics,title,subtitle,'#3d62a8',extra,caveat,out/'performance.png',
+             execution_note=execution_note(execution))
     (out/'metrics.json').write_text(json.dumps(metrics,ensure_ascii=False,indent=2,allow_nan=False),encoding='utf-8')
+    if execution is not None:
+        (out/'execution_modes.json').write_text(json.dumps(execution,ensure_ascii=False,indent=2,allow_nan=False),encoding='utf-8')
     for name, records in [('annual.csv',metrics['annual']),('daily.csv',metrics['series'])]:
         with (out/name).open('w',encoding='utf-8-sig',newline='') as f:
             writer=csv.DictWriter(f,fieldnames=list(records[0]));writer.writeheader();writer.writerows(records)
@@ -157,16 +165,32 @@ def scenario_observations(config, snapshots):
     return [by_day[d] for d in sorted(by_day)]
 
 
+def execution_note(execution):
+    """One-line disclosure of the matching settings for the standard figure."""
+    if not execution:
+        return ''
+    cfg = execution['default_config']
+    rate = 0.1 if cfg['participation'] is None else float(cfg['participation'])
+    note = f"成交设置：默认 {cfg['price_model']}（滑点{cfg['slippage_ticks']} tick，参与率{rate:.2%}）"
+    chosen = [m['price_model'] for m in execution['modes'] if m['source'] == 'order']
+    if chosen:
+        note += '；逐单 ' + ' / '.join(chosen)
+    if execution['instrument_overrides']:
+        note += '；标的覆盖见 execution_modes.json'
+    return note
+
+
 def export_scenario_report(payload, config, output):
     rows = scenario_observations(config,payload['snapshots'])
     if not rows:
         raise ValueError('Cannot finalize an empty backtest')
     return export_performance(rows,config['initial_cash'],rows[0]['day'],output,
                               title=config.get('name','回测表现'),
-                              observation_basis='last_observed_trading_day_equity')
+                              observation_basis='last_observed_trading_day_equity',
+                              execution=payload.get('execution_modes'))
 
 
-def plot(metrics, title, subtitle, accent, extra, caveat, destination):
+def plot(metrics, title, subtitle, accent, extra, caveat, destination, execution_note=''):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
@@ -249,5 +273,7 @@ def plot(metrics, title, subtitle, accent, extra, caveat, destination):
     fig.text(.06,.065,'口径：CAGR按自然日/365.25；夏普为交易日收益、252日年化、无风险0；卡尔玛=CAGR/日终最大回撤。',fontsize=9,color='#65758b')
     fig.text(.06,.046,'年度收益按期初权益；年内回撤逐年重置高点；休市收益并入下一交易日。不完整年份标“区间”，年度收益未年化。',fontsize=9,color='#65758b')
     fig.text(.06,.027,caveat[:115],fontsize=9,color='#65758b')
+    if execution_note:
+        fig.text(.06,.008,execution_note,fontsize=9,color='#3d62a8')
     fig.savefig(destination,dpi=180,facecolor=fig.get_facecolor())
     plt.close(fig)

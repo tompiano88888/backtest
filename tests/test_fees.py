@@ -11,7 +11,7 @@ from test_engine import engine, frame, T
 
 def setup_engine(matching='today_first', today='.00023'):
     e = engine()
-    e.config = ExecutionConfig(participation=1, fee_rate='.000023',
+    e.config = ExecutionConfig(participation=1, slippage_ticks=0, fee_rate='.000023',
                               close_today_fee_rate=today, fee_matching=matching)
     e.ledger.apply(Fill(T-timedelta(days=1), T.date()-timedelta(days=1),
                         Instruction('A',1,10,group='old'),D(100),D(0)))

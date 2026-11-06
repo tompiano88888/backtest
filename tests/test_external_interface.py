@@ -19,7 +19,7 @@ def test_external_callback_entry_exports_standard_results(tmp_path):
     assert result['fills']
     assert 'residual' in result
     report = tmp_path/'external'/'standard_report'
-    assert {p.name for p in report.iterdir()} == {'performance.png', 'metrics.json', 'annual.csv', 'daily.csv'}
+    assert {p.name for p in report.iterdir()} == {'performance.png', 'metrics.json', 'annual.csv', 'daily.csv', 'execution_modes.json'}
     assert json.loads((report/'metrics.json').read_text(encoding='utf-8'))['pnl'] == result['final']['pnl']
 
 
