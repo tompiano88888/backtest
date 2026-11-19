@@ -175,3 +175,5 @@ M0：规格、Python 工程、测试入口。M1：标准模型、PIT 元数据�
 * 上交所股票期权规则：https://www.sse.com.cn/lawandrules/sselawsrules2025/option/c/c_20250610_10781448.shtml
 
 用户确认的仿真假设优先于真实交割及资金限制规则，报告必须披露这些差异。
+
+2026-11-19同步通用核心可选定时限价报单 `limit_timed`，接受 `limit_wait_minutes` 和 `timeout_action`，支持回调submit、target系列及预生成指令。按实际分钟计时，日线跨越截止时间时报错。接口详见docs/ORDER_LEVEL_EXECUTION.md。

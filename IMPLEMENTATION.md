@@ -25,3 +25,5 @@
 ## 本次验证
 
 2026-10-28：137项框架测试通过、compileall通过；wheel构建并隔离安装，确认不依赖iFinD或其他工作副本。模拟AKShare固定快照通过CLI和Python完整输出入口均为PnL100元，审计JSON完全一致，四项标准报告齐全。测试数量减少源于移除旧供应商适配测试，保留通用账务/撮合/费用/账户事件及竞价回归。本次没有联网验证行情端点或重跑具体研究策略。
+
+2026-11-19同步通用核心可选定时限价报单 `limit_timed`，接受 `limit_wait_minutes` 和 `timeout_action`，支持回调submit、target系列及预生成指令。按实际分钟计时，日线跨越截止时间时报错。接口详见docs/ORDER_LEVEL_EXECUTION.md。

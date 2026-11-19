@@ -110,3 +110,27 @@ with Store("data") as store:
 # 标准绩效输出
 
 `run_scenario(config, on_bar=None, *, output=None)`传output时保存结果并默认生成标准报告；`save_result(engine, config, path)`可用于完成后的统一落盘。`backtest.performance.export_performance(daily_rows, initial, start, output, ...)`供外部完整研究调用，输出PNG/指标JSON/年度和逐日CSV。日终和交易日语义、缺样本/负权益处理及默认入口见[标准报告](STANDARD_PERFORMANCE.md)。
+
+## 定时限价报单
+
+回调可逐单选择 `price_model="limit_timed"`，传入冻结 `limit_price`、正整数
+`limit_wait_minutes` 和 `timeout_action="market"` 或 `"cancel"`。
+`ctx.target/target_group/target_weight` 同样接受这两个新增参数。该模式仅供逐单选择。
+
+```python
+ctx.submit([Instruction("F", 1, 5, limit_price=D("99"),
+                        price_model="limit_timed", limit_wait_minutes=5,
+                        timeout_action="market")])
+```
+
+截止时间为提交时间加X个实际分钟，休市及缺行情计时。09:10提交，09:10至09:15使用限价，
+09:15开盘起对余量转市价或撤单。限价期买入按min(open, limit)、卖出按max(open, limit)，
+未触价不成交；转市价按配置滑点，未完成余量继续重试。真实成交约束和共享容量始终适用。
+实际成交保留等待分钟、到期动作及冻结报价，已成交量不重复下单。
+撤单产生 `ORDER_CANCELLED`，原因 `limit_timeout`，保留已成交持仓。
+撤单在首个开盘时刻达到截止时间的帧撮合前确认；无该标的报价时按帧时间确认。
+跨越截止时间的粗粒度Bar报错，调用方须提供更细Bar。竞价截止前遵守限价，到期转市价后按竞价价格。
+日终过期、持续目标和组合超时仍适用；组合三次超时可能先于定时截止时间发生。
+持续限价目标不会在日终以旧报价重提，回调再次设置目标将生成新的操作并重新计时。
+
+AKShare公共入口仍提供日线数据。日线无法区分盘中截止前后的价格路径，跨越截止时间的日线明确报错；到开盘时已到期的报单可转市价或撤单。分钟合成测试只验证通用核心时序。

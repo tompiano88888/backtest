@@ -47,5 +47,6 @@
   "tests/test_performance_output.py",
   "tests/test_repository_boundary.py",
   "tests/test_runner.py",
-  "tests/test_storage.py"
+  "tests/test_storage.py",
+  "tests/test_timed_limit.py"
 ]

@@ -103,7 +103,7 @@ def run_scenario(config, on_bar=None, *, output=None, strategy=None):
             if "legs" in event:
                 engine.submit([Instruction(**leg) for leg in event["legs"]], at, event.get("combination", False))
             else:
-                pricing = {key: event[key] for key in ("price_model", "limit_price") if key in event}
+                pricing = {key: event[key] for key in ("price_model", "limit_price", "limit_wait_minutes", "timeout_action") if key in event}
                 if "weight" in event:
                     engine.target_weight(event["instrument"], event["weight"], at, **pricing)
                 else:

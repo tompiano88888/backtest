@@ -108,7 +108,7 @@ class Bar:
 
 
 # Price models a callback may select per order via Instruction.price_model (None = configured model).
-ORDER_PRICE_MODELS = ('next_open', 'previous_close_then_open', 'bar_average', 'limit_open_then_market')
+ORDER_PRICE_MODELS = ('next_open', 'previous_close_then_open', 'bar_average', 'limit_open_then_market', 'limit_timed')
 
 
 @dataclass(frozen=True)
@@ -121,7 +121,17 @@ class Instruction:
     limit_price: Decimal | None = None  # order quotation, never a supplied fill price
     price_model: str | None = None  # order-level price model chosen by the callback (None = configured)
 
+    limit_wait_minutes: int | None = None
+    timeout_action: str | None = None
+
     def __post_init__(self):
+        if self.price_model == 'limit_timed':
+            if type(self.limit_wait_minutes) is not int or self.limit_wait_minutes <= 0:
+                raise ValueError('limit_timed requires positive integer limit_wait_minutes')
+            if self.timeout_action not in ('market', 'cancel'):
+                raise ValueError('limit_timed requires timeout_action market or cancel')
+        elif self.limit_wait_minutes is not None or self.timeout_action is not None:
+            raise ValueError('Timed limit parameters require price_model limit_timed')
         if self.side not in (-1, 1) or type(self.quantity) is not int or self.quantity <= 0 or self.effect not in ("open", "close"):
             raise ValueError("Invalid instruction")
         if self.limit_price is not None:
@@ -130,9 +140,9 @@ class Instruction:
             # Order-level price model chosen by the strategy callback; overrides the configured one.
             if self.price_model not in ORDER_PRICE_MODELS:
                 raise ValueError(f'Unknown order price model: {self.price_model!r}')
-            if self.price_model == 'limit_open_then_market':
+            if self.price_model in ('limit_open_then_market', 'limit_timed'):
                 if self.limit_price is None or self.limit_price <= 0:
-                    raise ValueError('limit_open_then_market requires a positive frozen limit_price (signal price plus offset)')
+                    raise ValueError(f'{self.price_model} requires a positive frozen limit_price (signal price plus offset)')
             elif self.limit_price is not None and self.price_model != 'next_open':
                 raise ValueError(f'{self.price_model} is a market-intent model and takes no limit_price')
 

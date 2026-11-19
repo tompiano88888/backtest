@@ -25,3 +25,27 @@ def on_bar(ctx):
 `target`、`target_group` 和 `target_weight` 接受 `price_model` 和 `limit_price`。预生成目标使用同名字段。回调可通过 `ctx.cancel(operation_id)` 撤销在途余量，或通过 `ctx.execution_details_since(cursor)` 对照 `ctx.fills_since(cursor)` 核对成交方法。
 
 完整运行的结果 JSON 包含 `execution_modes`、`execution_details` 和 `execution_attempts`。标准报告的图片显示撮合摘要，`execution_modes.json` 和 `metrics.json` 提供默认配置、标的覆盖、逐单选择及实际方法和未成交原因。
+
+## 定时限价报单
+
+回调可逐单选择 `price_model="limit_timed"`，传入冻结 `limit_price`、正整数
+`limit_wait_minutes` 和 `timeout_action="market"` 或 `"cancel"`。
+`ctx.target/target_group/target_weight` 同样接受这两个新增参数。该模式仅供逐单选择。
+
+```python
+ctx.submit([Instruction("F", 1, 5, limit_price=D("99"),
+                        price_model="limit_timed", limit_wait_minutes=5,
+                        timeout_action="market")])
+```
+
+截止时间为提交时间加X个实际分钟，休市及缺行情计时。09:10提交，09:10至09:15使用限价，
+09:15开盘起对余量转市价或撤单。限价期买入按min(open, limit)、卖出按max(open, limit)，
+未触价不成交；转市价按配置滑点，未完成余量继续重试。真实成交约束和共享容量始终适用。
+实际成交保留等待分钟、到期动作及冻结报价，已成交量不重复下单。
+撤单产生 `ORDER_CANCELLED`，原因 `limit_timeout`，保留已成交持仓。
+撤单在首个开盘时刻达到截止时间的帧撮合前确认；无该标的报价时按帧时间确认。
+跨越截止时间的粗粒度Bar报错，调用方须提供更细Bar。竞价截止前遵守限价，到期转市价后按竞价价格。
+日终过期、持续目标和组合超时仍适用；组合三次超时可能先于定时截止时间发生。
+持续限价目标不会在日终以旧报价重提，回调再次设置目标将生成新的操作并重新计时。
+
+AKShare公共入口仍提供日线数据。日线无法区分盘中截止前后的价格路径，跨越截止时间的日线明确报错；到开盘时已到期的报单可转市价或撤单。分钟合成测试只验证通用核心时序。
