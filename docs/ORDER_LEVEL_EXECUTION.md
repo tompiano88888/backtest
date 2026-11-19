@@ -54,3 +54,25 @@ def on_bar(ctx):
 3. `locked_close_average` 仍只能由 `close_locked` 使用，不能经 `target*` 选择。
 4. `limit_open_then_market` 的第一Bar未成交余量按原规则转受限市价，并非“仅一根Bar有效”；需要仅一根Bar有效时，回调可在下一帧用 `ctx.cancel(operation_id)` 取消。
 5. 回调逐单选择只改变定价模型；日线/分钟线价格路径、同Bar内成交顺序及保守成交时间沿用既有说明，不新增秒级排队假设。
+
+## 定时限价报单
+
+回调可逐单选择 `price_model="limit_timed"`，传入冻结 `limit_price`、正整数
+`limit_wait_minutes` 和 `timeout_action="market"` 或 `"cancel"`。
+`ctx.target/target_group/target_weight` 同样接受这两个新增参数。该模式仅供逐单选择。
+
+```python
+ctx.submit([Instruction("F", 1, 5, limit_price=D("99"),
+                        price_model="limit_timed", limit_wait_minutes=5,
+                        timeout_action="market")])
+```
+
+截止时间为提交时间加X个实际分钟，休市及缺行情计时。09:10提交，09:10至09:15使用限价，
+09:15开盘起对余量转市价或撤单。限价期买入按min(open, limit)、卖出按max(open, limit)，
+未触价不成交；转市价按配置滑点，未完成余量继续重试。真实成交约束和共享容量始终适用。
+实际成交保留等待分钟、到期动作及冻结报价，已成交量不重复下单。
+撤单产生 `ORDER_CANCELLED`，原因 `limit_timeout`，保留已成交持仓。
+撤单在首个开盘时刻达到截止时间的帧撮合前确认；无该标的报价时按帧时间确认。
+跨越截止时间的粗粒度Bar报错，调用方须提供更细Bar。竞价截止前遵守限价，到期转市价后按竞价价格。
+日终过期、持续目标和组合超时仍适用；组合三次超时可能先于定时截止时间发生。
+持续限价目标不会在日终以旧报价重提，回调再次设置目标将生成新的操作并重新计时。

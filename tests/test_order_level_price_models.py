@@ -266,3 +266,99 @@ def test_result_and_standard_report_disclose_order_level_models(tmp_path):
     assert json.loads((report / "metrics.json").read_text(encoding="utf-8"))["execution_modes"]["selection"]
     assert (report / "performance.png").read_bytes().startswith(b"\x89PNG")
     assert engine.ledger.quantity("A", 1) == 30
+
+
+@pytest.mark.parametrize('action', ['market', 'cancel'])
+def test_timed_limit_five_minutes_partial_remainder_and_cash(action):
+    # At 09:31 submit five lots at 99. Only two fill in five minutes.
+    # At 09:36 market remainder fills at 101 or cancellation preserves two lots.
+    e = make_engine()
+    first = mbar('F', '09:31', 100, 102, 100, 100)
+    frames = [{'F': first}]
+    for minute in range(32, 37):
+        frames.append({'F': mbar('F', f'09:{minute}', 100, 102, 99 if minute == 34 else 100,
+                                100, volume=4 if minute == 34 else 100)})
+    frames.append({'F': mbar('F', '09:37', 100, 102, 98, 100)})
+    run(e, frames, lambda ctx: ctx.submit([Instruction(
+        'F', 1, 5, limit_price=99, price_model='limit_timed',
+        limit_wait_minutes=5, timeout_action=action)]))
+    assert [(f.instruction.quantity, f.price) for f in e.ledger.fills] == (
+        [(2, D(99)), (3, D(101))] if action == 'market' else [(2, D(99))])
+    assert e.operations[0].state == ('completed' if action == 'market' else 'cancelled')
+    assert e.ledger.cash == D(10_000_000)  # Futures opening has no principal cash movement.
+    if action == 'cancel':
+        assert any(w['code'] == 'ORDER_CANCELLED' and w['reason'] == 'limit_timeout' for w in e.warnings)
+    quantity = e.ledger.quantity('F', 1, 'standalone')
+    e.submit([Instruction('F', 1, quantity, 'close')], e.now)
+    closing = mbar('F', '09:38', 101, 102, 99, 101)
+    e.step(Frame(closing.end, {'F': closing}, frozenset({'F'})))
+    assert e.ledger.cash == D(10_000_000) + (D(-10) if action == 'market' else D(20))
+    assert not e.ledger.lots
+
+
+@pytest.mark.parametrize('side,limit,opening,expected', [(1, 101, 100, 100), (-1, 99, 100, 100)])
+def test_timed_limit_open_improvement(side, limit, opening, expected):
+    e = make_engine()
+    run(e, [{'F': mbar('F', '09:31', 100, 102, 98, 100)},
+            {'F': mbar('F', '09:32', opening, 102, 98, 100)}],
+        lambda ctx: ctx.submit([Instruction('F', side, 5, limit_price=limit,
+            price_model='limit_timed', limit_wait_minutes=5, timeout_action='market')]))
+    assert e.ledger.fills[0].price == D(expected)
+
+
+def test_timed_limit_elapsed_clock_missing_quotes_and_target_callback():
+    e = make_engine()
+    first = mbar('F', '09:31', 100, 101, 100, 100)
+    e.step(Frame(first.end, {'F': first}, frozenset({'F'})), lambda ctx: ctx.target(
+        'F', 5, price_model='limit_timed', limit_price=99,
+        limit_wait_minutes=5, timeout_action='market'))
+    # No observations until 09:40. Timeout is independent of retry count.
+    later = mbar('F', '09:41', 100, 102, 100, 100)
+    e.step(Frame(later.end, {'F': later}, frozenset({'F'})))
+    assert e.ledger.fills[0].price == D(101)
+    assert e.ledger.fills[0].time == later.start
+
+
+@pytest.mark.parametrize('params', [dict(limit_wait_minutes=0, timeout_action='market'),
+    dict(limit_wait_minutes=True, timeout_action='market'),
+    dict(limit_wait_minutes=5, timeout_action='unknown'), dict(limit_wait_minutes=5)])
+def test_timed_limit_validation(params):
+    with pytest.raises(ValueError):
+        Instruction('F', 1, 5, price_model='limit_timed', limit_price=99, **params)
+
+
+def test_timed_limit_rejects_bar_crossing_deadline():
+    e = make_engine()
+    first = mbar('F', '09:31', 100, 101, 100, 100)
+    e.submit([Instruction('F', 1, 5, limit_price=99, price_model='limit_timed',
+                         limit_wait_minutes=5, timeout_action='market')], first.start)
+    coarse = Bar('F', first.start, first.end + timedelta(minutes=5), DAY,
+                 D(100), D(102), D(98), D(100), 100)
+    with pytest.raises(ValueError, match='straddles'):
+        e.step(Frame(coarse.end, {'F': coarse}, frozenset({'F'})))
+
+
+def test_timed_cancel_without_quotes():
+    e = make_engine()
+    first = mbar('F', '09:31', 100, 101, 100, 100)
+    e.step(Frame(first.end, {'F': first}, frozenset({'F'})), lambda ctx: ctx.submit([
+        Instruction('F', 1, 5, limit_price=99, price_model='limit_timed',
+                    limit_wait_minutes=5, timeout_action='cancel')]))
+    e.step(Frame(first.end + timedelta(minutes=5), {}, frozenset()))
+    assert e.operations[0].state == 'cancelled'
+    assert not e.ledger.fills
+
+
+@pytest.mark.parametrize('action,expected', [('market', 1), ('cancel', 0)])
+def test_timed_limit_auction_at_deadline(action, expected):
+    from backtest.models import Auction
+    e = make_engine()
+    first = mbar('F', '09:31', 100, 101, 100, 100)
+    e.submit([Instruction('F', 1, 5, limit_price=99, price_model='limit_timed',
+                         limit_wait_minutes=5, timeout_action=action)], first.end)
+    at = first.end + timedelta(minutes=5)
+    auction = Auction('F', at, DAY, D(101), 100)
+    e.step(Frame(at, {}, frozenset({'F'}), auctions={'F': auction}))
+    assert len(e.ledger.fills) == expected
+    if expected:
+        assert e.ledger.fills[0].price == D(101)

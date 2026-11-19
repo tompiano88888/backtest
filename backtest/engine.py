@@ -122,14 +122,14 @@ class StrategyContext:
     def cancel(self, operation_id, reason='strategy_cancel'):
         return self.__engine.cancel(operation_id, self.time, reason)
 
-    def target(self, instrument, quantity, price_model=None, limit_price=None):
-        return self.__engine.target(instrument, quantity, self.time, price_model=price_model, limit_price=limit_price)
+    def target(self, instrument, quantity, price_model=None, limit_price=None, limit_wait_minutes=None, timeout_action=None):
+        return self.__engine.target(instrument, quantity, self.time, price_model=price_model, limit_price=limit_price, limit_wait_minutes=limit_wait_minutes, timeout_action=timeout_action)
 
-    def target_group(self, instrument, quantity, group, price_model=None, limit_price=None):
-        return self.__engine.target_group(instrument, quantity, self.time, group, price_model=price_model, limit_price=limit_price)
+    def target_group(self, instrument, quantity, group, price_model=None, limit_price=None, limit_wait_minutes=None, timeout_action=None):
+        return self.__engine.target_group(instrument, quantity, self.time, group, price_model=price_model, limit_price=limit_price, limit_wait_minutes=limit_wait_minutes, timeout_action=timeout_action)
 
-    def target_weight(self, instrument, weight, price_model=None, limit_price=None):
-        return self.__engine.target_weight(instrument, weight, self.time, price_model=price_model, limit_price=limit_price)
+    def target_weight(self, instrument, weight, price_model=None, limit_price=None, limit_wait_minutes=None, timeout_action=None):
+        return self.__engine.target_weight(instrument, weight, self.time, price_model=price_model, limit_price=limit_price, limit_wait_minutes=limit_wait_minutes, timeout_action=timeout_action)
 
     def close_locked(self, instrument, long_group, short_group, quantity=None):
         return self.__engine.close_locked(instrument, long_group, short_group, self.time, quantity)
@@ -272,25 +272,25 @@ class Engine:
                                        price_model='locked_close_average', total_adverse_ticks='1'))
         return op
 
-    def target(self, instrument, quantity: int, at: datetime, group="standalone", price_model=None, limit_price=None):
+    def target(self, instrument, quantity: int, at: datetime, group="standalone", price_model=None, limit_price=None, limit_wait_minutes=None, timeout_action=None):
         """Persistent net target; explicit derivative directions use submit instead.
 
         price_model / limit_price are the callback's order-level choice for the orders this target
         generates (see Instruction.price_model)."""
         if group != "standalone":
             raise ValueError("Combination quantities must be submitted as legs")
-        self._set_target_order(instrument, group, price_model, limit_price)
+        self._set_target_order(instrument, group, price_model, limit_price, limit_wait_minutes, timeout_action)
         self.targets[instrument, group] = quantity
         self._reconcile_target(instrument, group, at)
 
-    def _set_target_order(self, instrument, group, price_model, limit_price):
+    def _set_target_order(self, instrument, group, price_model, limit_price, limit_wait_minutes, timeout_action):
         if price_model == 'locked_close_average':
             raise ValueError('Use close_locked for paired average-price releases')
-        Instruction(instrument, 1, 1, 'open', group, limit_price, price_model)  # validates the combination
+        Instruction(instrument, 1, 1, 'open', group, limit_price, price_model, limit_wait_minutes, timeout_action)  # validates the combination
         if price_model is None and limit_price is None:
             self.target_orders.pop((instrument, group), None)
         else:
-            self.target_orders[instrument, group] = (price_model, limit_price)
+            self.target_orders[instrument, group] = (price_model, limit_price, limit_wait_minutes, timeout_action)
 
     def cancel(self, operation_id: int, at: datetime, reason='strategy_cancel'):
         """Cancel only outstanding quantities, at the currently observed frame."""
@@ -307,7 +307,7 @@ class Engine:
                               group=l.group, quantity=l.quantity) for l in op.legs])
         return True
 
-    def target_weight(self, instrument, weight, at, price_model=None, limit_price=None):
+    def target_weight(self, instrument, weight, at, price_model=None, limit_price=None, limit_wait_minutes=None, timeout_action=None):
         inst = self.ledger.instruments[instrument]
         if inst.asset in (Asset.OPTION, Asset.INDEX):
             raise ValueError("Option weights belong in research; indexes are not tradeable")
@@ -315,9 +315,9 @@ class Engine:
         if nominal <= 0 or self.ledger.last_equity <= 0:
             raise ValueError("Weight sizing requires positive equity and nominal price")
         quantity = int(D(weight) * self.ledger.last_equity / nominal / inst.lot) * inst.lot
-        self.target(instrument, quantity, at, price_model=price_model, limit_price=limit_price)
+        self.target(instrument, quantity, at, price_model=price_model, limit_price=limit_price, limit_wait_minutes=limit_wait_minutes, timeout_action=timeout_action)
 
-    def target_group(self, instrument, quantity: int, at: datetime, group: str, price_model=None, limit_price=None):
+    def target_group(self, instrument, quantity: int, at: datetime, group: str, price_model=None, limit_price=None, limit_wait_minutes=None, timeout_action=None):
         """Persistent target for one independent single-instrument batch."""
         if not group or group == 'standalone' or group in self.groups:
             raise ValueError('Independent group required; combinations use explicit legs')
@@ -327,7 +327,7 @@ class Engine:
             raise ValueError('Independent target group already belongs to another instrument')
         if type(quantity) is not int:
             raise ValueError('Target quantity must be integer')
-        self._set_target_order(instrument, group, price_model, limit_price)
+        self._set_target_order(instrument, group, price_model, limit_price, limit_wait_minutes, timeout_action)
         self.targets[instrument,group] = quantity
         self._reconcile_target(instrument,group,at)
 
@@ -336,15 +336,15 @@ class Engine:
             if not op.combination and op.state == "pending" and any(l.instrument == instrument and l.group == group for l in op.legs):
                 op.state = "cancelled"
         target = self.targets[instrument, group]
-        order_model, order_limit = self.target_orders.get((instrument, group), (None, None))
+        order_model, order_limit, wait_minutes, timeout_action = self.target_orders.get((instrument, group), (None, None, None, None))
         legs = []
         for side in (1, -1):
             held = self.ledger.quantity(instrument, side, group)
             wanted = abs(target) if target * side > 0 else 0
             if held > wanted:
-                legs.append(Instruction(instrument, side, held - wanted, "close", group, order_limit, order_model))
+                legs.append(Instruction(instrument, side, held - wanted, "close", group, order_limit, order_model, wait_minutes, timeout_action))
             elif held < wanted:
-                legs.append(Instruction(instrument, side, wanted - held, "open", group, order_limit, order_model))
+                legs.append(Instruction(instrument, side, wanted - held, "open", group, order_limit, order_model, wait_minutes, timeout_action))
         if legs:
             self.submit(legs, at)
         elif target == 0 and group != 'standalone':
@@ -401,12 +401,24 @@ class Engine:
         when = bar.start if price == bar.open else bar.end
         return price, when, 'limit_open', None
 
-    def _price_quote(self, leg, bar, attempt):
+    def _price_quote(self, leg, bar, attempt, submitted=None):
         """Internal price/time rule; never accepts research-supplied fill prices.
 
         A first reference-price touch is timestamped at the Bar end because its
         path is unknown. Later market attempts execute at the next Bar open.
         """
+        if leg.price_model == 'limit_timed':
+            deadline = submitted + timedelta(minutes=leg.limit_wait_minutes)
+            start = bar.time if isinstance(bar, Auction) else bar.start
+            if start >= deadline:
+                cfg = self.execution_by_instrument.get(leg.instrument, self.config)
+                if isinstance(bar, Auction):
+                    return bar.price, start, 'auction_market', None
+                return self._market_price(leg, bar, cfg), start, 'market_open', None
+            if isinstance(bar, Bar) and bar.end > deadline:
+                raise ValueError('Bar straddles timed limit deadline; supply finer Bars')
+            if isinstance(bar, Bar):
+                return self._favorable_limit_quote(leg, bar)
         if leg.price_model == 'locked_close_average':
             if not isinstance(bar, Bar) or bar.end-bar.start != timedelta(minutes=1):
                 when = bar.time if isinstance(bar, Auction) else bar.end
@@ -445,7 +457,7 @@ class Engine:
             return self._market_price(leg, bar, cfg), bar.start, 'market_open', None
         return self._market_price(leg, bar, cfg), bar.start, 'next_open', None
 
-    def _match(self, leg, bar, available_volume, attempt=1):
+    def _match(self, leg, bar, available_volume, attempt=1, submitted=None):
         # self._reject_reason explains a None result; it never influences the decision itself.
         self._reject_reason = None
         inst = self.ledger.instruments[leg.instrument]
@@ -482,7 +494,7 @@ class Engine:
             self._reject_reason = ("NO_CLOSEABLE_POSITION" if closeable == 0
                                    else "NO_VOLUME_BUDGET" if available_volume is not None and available_volume <= 0 else "BELOW_LOT_SIZE")
             return None
-        price, fill_time, _, price_error = self._price_quote(leg,bar,attempt)
+        price, fill_time, _, price_error = self._price_quote(leg,bar,attempt,submitted)
         if price_error:
             self._reject_reason = price_error
             return None
@@ -548,6 +560,21 @@ class Engine:
         pending = sorted([o for o in self.operations if o.state in ("pending", "unwinding")], key=lambda o: (not any(l.effect == "close" for l in o.legs), o.id))
         eligible = []
         for op in pending:
+            cancelled = []
+            for leg in op.legs:
+                if leg.price_model != 'limit_timed' or leg.timeout_action != 'cancel':
+                    continue
+                quote = quotes.get(leg.instrument)
+                start = (quote.time if isinstance(quote, Auction) else quote.start) if quote else frame.time
+                if start >= op.submitted + timedelta(minutes=leg.limit_wait_minutes):
+                    cancelled.append(leg)
+            if cancelled:
+                self._warn(op, 'ORDER_CANCELLED', reason='limit_timeout',
+                           legs=[self._leg_view(leg) for leg in cancelled])
+                if len(cancelled) == len(op.legs):
+                    op.state = 'cancelled'
+                    continue
+                op.legs = [leg for leg in op.legs if leg not in cancelled]
             if op.submitted >= frame.time:
                 continue
             if op.combination and not op.original_instruments <= frame.open_instruments:
@@ -575,7 +602,7 @@ class Engine:
         def execution_priority(item):
             op, index, leg = item
             quote = quotes.get(leg.instrument)
-            when = self._price_quote(leg,quote,op.attempts)[1] if quote is not None else frame.time
+            when = self._price_quote(leg,quote,op.attempts,op.submitted)[1] if quote is not None else frame.time
             return when, leg.effect != 'close', op.id, index
         ordered_legs = sorted([(o, j, l) for o in eligible for j, l in enumerate(o.legs)], key=execution_priority)
         for op, _, leg in ordered_legs:
@@ -593,7 +620,7 @@ class Engine:
                     if op.id not in unlock_caps:
                         unlock_caps[op.id] = available // 2 if len(op.legs) == 2 else available
                     available = min(available, unlock_caps[op.id])
-                fill = self._match(leg, bar, available,op.attempts)
+                fill = self._match(leg, bar, available,op.attempts,op.submitted)
                 reason = self._reject_reason
             else:
                 fill = None
@@ -628,7 +655,7 @@ class Engine:
                 self.ledger.apply(fill)
                 self.fees.commit(fill, detail)
                 if cfg.price_model != 'next_open' or leg.limit_price is not None or leg.price_model is not None or isinstance(bar,Auction):
-                    _, _, method, _ = self._price_quote(leg,bar,op.attempts)
+                    _, _, method, _ = self._price_quote(leg,bar,op.attempts,op.submitted)
                     ref = self._bar_closes.get(leg.instrument)
                     self.execution_details.append(dict(fill_index=len(self.ledger.fills)-1,operation=op.id,
                                                        method=method,attempt=op.attempts,time=fill.time,
@@ -637,6 +664,7 @@ class Engine:
                                                        reference_time=ref[0] if ref else None,
                                                        reference_close=ref[1] if ref else None,
                                                        limit_price=leg.limit_price,
+                                                       limit_wait_minutes=leg.limit_wait_minutes, timeout_action=leg.timeout_action,
                                                        price_model=self._model(leg,cfg),
                                                        price_model_source='order' if leg.price_model else 'config',
                                                        auction_volume_exempt=exempt,
@@ -811,7 +839,8 @@ class Engine:
     @staticmethod
     def _leg_view(leg):
         return dict(instrument=leg.instrument, side=leg.side, effect=leg.effect, group=leg.group,
-                    quantity=leg.quantity, price_model=leg.price_model)
+                    quantity=leg.quantity, price_model=leg.price_model, limit_price=leg.limit_price,
+                    limit_wait_minutes=leg.limit_wait_minutes, timeout_action=leg.timeout_action)
 
     def residual(self):
         """Read-only view of what is still open, pending or unsettled right now."""
@@ -864,6 +893,7 @@ class Engine:
                       "(or the price_model/limit_price arguments of target*); exactly one model per order; "
                       "orders without a choice use the configured default.",
             order_models=dict(
+                limit_timed="frozen favorable limit until submitted + limit_wait_minutes elapsed minutes; then market remainder or cancel; original day/combination lifecycle applies",
                 limit_open_then_market="frozen limit_price = signal price +/- strategy offset; next Bar: open if the open is not worse than "
                                        "the quotation, else the quotation if the Bar reaches it (never outside [low, high]); "
                                        "unfilled remainder continues as capped market orders",

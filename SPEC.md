@@ -188,3 +188,5 @@ M0：规格、Python 工程、测试入口。M1：标准模型、PIT 元数据�
 * 上交所股票期权规则：https://www.sse.com.cn/lawandrules/sselawsrules2025/option/c/c_20250610_10781448.shtml
 
 用户确认的仿真假设优先于真实交割及资金限制规则，报告必须披露这些差异。
+
+2026-11-19用户补充：回调可选择限价挂X分钟，到期未成交余量转市价或撤单，与原有报单模式并存。接口和计时规则见docs/ORDER_LEVEL_EXECUTION.md。

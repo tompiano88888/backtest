@@ -145,3 +145,5 @@ ETF 分红元数据：`backtest.ifind_etf_dividends.read_events(store, version, 
 # 标准绩效输出
 
 `run_scenario(config, on_bar=None, *, output=None)`传output时保存结果并默认生成标准报告；`save_result(engine, config, path)`可用于完成后的统一落盘。`backtest.performance.export_performance(daily_rows, initial, start, output, ...)`供外部完整研究调用，输出PNG/指标JSON/年度和逐日CSV。日终和交易日语义、缺样本/负权益处理及默认入口见[标准报告](STANDARD_PERFORMANCE.md)。
+
+定时限价报单支持 `Instruction(price_model="limit_timed", limit_price=..., limit_wait_minutes=X, timeout_action="market"或"cancel")`，target系列接受同名参数。按提交时间起实际分钟计时，详情见[订单级执行](ORDER_LEVEL_EXECUTION.md)。
